@@ -43,6 +43,11 @@ export class OllamaService {
 
       const data = (await response.json()) as OllamaChatResponse;
       return data.message.content;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`Ollama request timed out after ${config.ollamaTimeoutMs}ms`);
+      }
+      throw error;
     } finally {
       clearTimeout(timeout);
     }

@@ -13,7 +13,7 @@ This document describes the target runtime architecture for maikBot, why it is d
 
 maikBot runs as a local backend service and connects to Telegram using long polling.  
 Ollama runs in a Proxmox LXC container on the local network.  
-Skill actions are reached through an MCP gateway endpoint (currently Home Assistant, extensible e.g. Paperless).
+Skill actions are reached through a Home Assistant MCP Server endpoint (`/api/mcp`).
 
 ## Deployment Diagram (Mermaid)
 
@@ -41,8 +41,8 @@ mmdc -i docs/diagrams/message-flow.mmd -o docs/diagrams/message-flow.svg
 - LXC isolation limits blast radius versus running all services in one host context.
 
 3. Controlled tool access
-- maikBot talks to skills through MCP, not directly from arbitrary prompts.
-- MCP gateway provides a policy/control point (auth, logging, tool restrictions).
+- maikBot talks to Home Assistant tools through MCP, not directly from arbitrary prompts.
+- Home Assistant MCP Server provides a policy/control point (auth, tool restrictions).
 
 4. Operational simplicity
 - Clear service boundaries make incidents easier to diagnose:
@@ -54,8 +54,8 @@ mmdc -i docs/diagrams/message-flow.mmd -o docs/diagrams/message-flow.svg
 |---|---|---|---|---|---|
 | maikBot | Telegram | HTTPS | `getUpdates`, `sendMessage` | Bot token | Receive/send chat messages |
 | maikBot | Ollama | HTTP/HTTPS (internal) | `POST /api/chat` | Network-level controls | LLM inference |
-| maikBot | MCP Gateway | HTTP/HTTPS (internal) | `POST /tool/call` | API key and/or mTLS | Skill tool call |
-| MCP Gateway | Skill Backend(s) | HTTP/HTTPS (internal) | Skill-specific endpoints | Scoped per-skill credentials | Execute skill actions/queries |
+| maikBot | Home Assistant MCP Server | HTTP/HTTPS (internal) | `POST /api/mcp` | Home Assistant long-lived token | MCP tools/list + tools/call |
+| Home Assistant MCP Server | Home Assistant entities/services | Internal integration | Native HA service calls | Scoped MCP exposure | Execute allowed HA actions/queries |
 
 ## Recommended Network Policy
 
@@ -63,16 +63,15 @@ Default policy: deny all, allow only explicit flows.
 
 - Allow `maikBot -> Telegram` (outbound TCP 443).
 - Allow `maikBot -> Ollama` (internal port 11434 only).
-- Allow `maikBot -> MCP Gateway` (internal service port only).
-- Allow `MCP Gateway -> Skill Backend(s)` (only required internal ports).
-- Deny WAN access to Ollama and MCP Gateway.
+- Allow `maikBot -> Home Assistant` (internal port 8123 for `/api/mcp` only).
+- Deny WAN access to Ollama and Home Assistant admin endpoints where possible.
 
 ## Container/Host Hardening Notes
 
 - Run Ollama in an unprivileged LXC where possible.
 - Keep system and container packages updated.
 - Store secrets in `.env` / secret manager, never in git.
-- Scope each skill token/API key to minimal permissions.
+- Scope Home Assistant token/API key to minimal permissions.
 - Keep Telegram allowlist active via `ALLOWED_TELEGRAM_USER_IDS`.
 
 ## Current Repository Mapping

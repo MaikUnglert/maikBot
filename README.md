@@ -29,7 +29,7 @@ flowchart LR
         end
       end
 
-      MCP["MCP Gateway<br/>(auth protected)"]
+      MCP["Home Assistant MCP Server<br/>(auth protected)"]
       subgraph Skills[Skill Backends]
         HA[Home Assistant]
         PL["Paperless - future"]
@@ -40,7 +40,7 @@ flowchart LR
     MB -->|Telegram API long polling| TG
     MB -->|Internal HTTP| OL
     MB -->|Internal HTTP with auth| MCP
-    MCP -->|Per skill auth token| Skills
+    MCP -->|Home Assistant tools| Skills
 
 ```
 
@@ -53,7 +53,7 @@ sequenceDiagram
     participant TG as Telegram Cloud
     participant B as maikBot Backend
     participant O as Ollama (LXC)
-    participant M as MCP Gateway
+    participant M as Home Assistant MCP Server
     participant S as Skill Backend (e.g. Home Assistant, Paperless)
 
     U->>TG: Send message
@@ -64,7 +64,7 @@ sequenceDiagram
         B->>O: POST /api/chat
         O-->>B: Model response
     else Message starts with skill command (currently /ha)
-        B->>M: POST /tool/call (auth)
+        B->>M: POST /api/mcp tools/call (auth)
         M->>S: Execute selected skill action/query
         S-->>M: Tool result
         M-->>B: Tool output

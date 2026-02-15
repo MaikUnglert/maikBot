@@ -18,10 +18,9 @@ Required:
 Recommended:
 - `ALLOWED_TELEGRAM_USER_IDS` (your Telegram user ID)
 
-Optional for MCP skill backend (currently Home Assistant):
+Optional for Home Assistant MCP server:
 - `HA_MCP_BASE_URL`
 - `HA_MCP_API_KEY`
-- `HA_MCP_TOOL_NAME`
 
 ## 3. Start
 
@@ -32,15 +31,18 @@ npm run dev
 ## 4. Usage
 
 - Regular Telegram message to the bot: response from Ollama
-- `/ha <instruction>`: calls the MCP connector (currently mapped to Home Assistant skill)
+- `/ha tools`: lists available Home Assistant MCP tools
+- `/ha on <name>` and `/ha off <name>`: convenience tool calls
+- `/ha <ToolName> <JSON args>`: direct MCP tool call
 
 Example:
 ```text
-/ha turn on the living room light
+/ha on kitchen light
+/ha HassLightSet {"name":"kitchen light","brightness":60}
 ```
 
 ## 5. Security Checks
 
 1. Ollama port reachable only internally (no WAN port forwarding).
 2. Allowlist configured (`ALLOWED_TELEGRAM_USER_IDS`).
-3. MCP endpoint is internal and authenticated.
+3. Home Assistant MCP endpoint (`/api/mcp`) is internal and authenticated.
