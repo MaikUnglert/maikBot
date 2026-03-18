@@ -5,8 +5,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import type { OllamaMessage, OllamaToolDefinition } from '../services/ollama.service.js';
 
-const SYSTEM_PROMPT = `/no_think
-You are MaikBot, a local AI assistant running on a home server.
+const SYSTEM_PROMPT = `You are MaikBot, a local AI assistant running on a home server.
 Rules:
 1) Respond briefly and clearly in German unless the user asks for another language.
 2) You have access to tools (smart home, shell, etc.). Use them when the user's request requires it.

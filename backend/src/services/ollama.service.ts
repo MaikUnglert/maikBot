@@ -73,6 +73,7 @@ export class OllamaService {
         model: config.ollamaModel,
         messages,
         stream: false,
+        think: false,
       };
 
       if (tools.length > 0) {
