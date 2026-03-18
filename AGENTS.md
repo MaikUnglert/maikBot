@@ -19,3 +19,9 @@
 - Prefer Telegram long polling over inbound webhooks unless explicitly required.
 - Treat Home Assistant access as high-risk: route through authenticated MCP tooling.
 - Keep changes small, auditable, and easy to review.
+
+## Git Workflow
+
+- Work on feature branches, merge to `main` via fast-forward when done, then delete the branch.
+- Write concise commit messages that explain *why*, not *what*; use imperative mood.
+- Never force-push to `main`. Never commit `.env` or secrets.

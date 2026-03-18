@@ -1,10 +1,15 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+const booleanString = z
+  .string()
+  .transform((val) => val.toLowerCase() === 'true' || val === '1')
+  .pipe(z.boolean());
+
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   ALLOWED_TELEGRAM_USER_IDS: z.string().default(''),
-  TELEGRAM_ALLOW_EMPTY_ALLOWLIST: z.coerce.boolean().default(false),
+  TELEGRAM_ALLOW_EMPTY_ALLOWLIST: booleanString.default('false'),
   OLLAMA_BASE_URL: z.string().url().default('http://127.0.0.1:11434'),
   OLLAMA_MODEL: z.string().min(1).default('qwen2.5:7b-instruct'),
   OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
@@ -13,7 +18,7 @@ const envSchema = z.object({
   MCP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
   OLLAMA_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(10),
   SHELL_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
-  TELEGRAM_SHOW_AGENT_TRACE: z.coerce.boolean().default(false),
+  TELEGRAM_SHOW_AGENT_TRACE: booleanString.default('false'),
   HA_MCP_BASE_URL: z.string().url().optional(),
   HA_MCP_API_KEY: z.string().optional(),
   LOG_LEVEL: z

@@ -12,7 +12,9 @@
     "test:ollama:reachability": "tsx src/tests/ollama-reachability.test.ts",
     "test:ollama:chat": "tsx src/tests/ollama-chat.test.ts",
     "test:ha:reachability": "tsx src/tests/ha-reachability.test.ts",
-    "test:ha:mcp-tools": "tsx src/tests/ha-mcp-tools.test.ts"
+    "test:ha:mcp-tools": "tsx src/tests/ha-mcp-tools.test.ts",
+    "test:shell": "tsx src/tests/shell-tool.test.ts",
+    "test:registry": "tsx src/tests/tool-registry.test.ts"
   },
   "engines": {
     "node": ">=22.0.0"
