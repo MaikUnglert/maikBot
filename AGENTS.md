@@ -22,6 +22,7 @@
 
 ## Git Workflow
 
-- Work on feature branches, merge to `main` via fast-forward when done, then delete the branch.
+- **Always** use a feature branch for every change, no matter how small. Never commit directly to `main`.
+- Merge to `main` via fast-forward when done, then delete the branch.
 - Write concise commit messages that explain *why*, not *what*; use imperative mood.
 - Never force-push to `main`. Never commit `.env` or secrets.
