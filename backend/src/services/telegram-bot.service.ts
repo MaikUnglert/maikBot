@@ -44,7 +44,7 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
   }
 
   try {
-    const response = await assistant.handleTextWithTrace(text);
+    const response = await assistant.handleTextWithTrace(chatId, text);
     const traceBlock =
       config.telegramShowAgentTrace && response.trace.length > 0
         ? `\n\n---\nAgent Trace:\n${response.trace.map((line) => `- ${line}`).join('\n')}`

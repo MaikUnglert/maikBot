@@ -1,7 +1,7 @@
 import { mcpHostService } from '../services/mcp-host.service.js';
 import { executeShell } from './tools/shell.js';
 import { logger } from '../logger.js';
-import type { OllamaToolDefinition } from '../services/ollama.service.js';
+import type { ToolDefinition } from '../services/llm.types.js';
 
 export interface ToolExecResult {
   ok: boolean;
@@ -9,14 +9,10 @@ export interface ToolExecResult {
 }
 
 interface RegisteredTool {
-  definition: OllamaToolDefinition;
+  definition: ToolDefinition;
   execute: (args: Record<string, unknown>) => Promise<ToolExecResult>;
 }
 
-/**
- * Normalizes an MCP inputSchema into a safe JSON Schema object
- * suitable for Ollama's tool parameters field.
- */
 function normalizeInputSchema(schema: unknown): Record<string, unknown> {
   if (
     schema &&
@@ -29,9 +25,6 @@ function normalizeInputSchema(schema: unknown): Record<string, unknown> {
   return { type: 'object', properties: {} };
 }
 
-/**
- * Built-in tools that are always available regardless of MCP configuration.
- */
 function getBuiltInTools(): RegisteredTool[] {
   return [
     {
@@ -67,19 +60,13 @@ function getBuiltInTools(): RegisteredTool[] {
 export class ToolRegistry {
   private builtInTools: RegisteredTool[] = getBuiltInTools();
 
-  /**
-   * Loads all available tools: MCP tools (policy-filtered, cached)
-   * merged with built-in tools. Returns Ollama tool definitions
-   * and a dispatch map.
-   */
   async loadTools(): Promise<{
-    definitions: OllamaToolDefinition[];
+    definitions: ToolDefinition[];
     dispatch: Map<string, (args: Record<string, unknown>) => Promise<ToolExecResult>>;
   }> {
-    const definitions: OllamaToolDefinition[] = [];
+    const definitions: ToolDefinition[] = [];
     const dispatch = new Map<string, (args: Record<string, unknown>) => Promise<ToolExecResult>>();
 
-    // MCP tools
     if (mcpHostService.isConfigured()) {
       const mcpTools = await mcpHostService.listTools();
       for (const tool of mcpTools) {
@@ -104,7 +91,6 @@ export class ToolRegistry {
       }
     }
 
-    // Built-in tools
     for (const tool of this.builtInTools) {
       const name = tool.definition.function.name;
       definitions.push(tool.definition);

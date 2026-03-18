@@ -1,70 +1,38 @@
-# maikBot Backend (New)
+# maikBot Backend
 
-Secure minimal backend for:
-- Telegram bot via long polling (no direct internet inbound port)
-- Local Ollama responses
-- Optional multi-MCP tool calls (e.g. Home Assistant, Paperless)
+Secure backend for the maikBot Telegram assistant.
 
-## 1. Setup
+## Setup
 
 ```bash
-cd backend
 npm install
-cp .env.example .env
-```
-
-Then fill in `.env`.
-
-## 2. Start
-
-```bash
+cp .env.example .env   # fill in values
 npm run dev
 ```
 
-## 3. Use Telegram
+## Scripts
 
-- Regular message: goes to Ollama
-- Natural language request: router decides between chat and MCP tools
-- `/mcp tools` (or `/ha tools`): list available MCP tools across configured servers
-- `/mcp <request>` (or `/ha <request>`): force MCP path
+| Script | Description |
+|--------|-------------|
+| `npm run dev` | Start with hot reload (tsx watch) |
+| `npm run build` | Compile TypeScript |
+| `npm run start` | Run compiled JS |
+| `npm run check` | Type-check without emitting |
+| `npm run test:shell` | Shell tool unit tests |
+| `npm run test:registry` | Tool registry tests |
+| `npm run test:ollama:reachability` | Ollama connectivity test |
+| `npm run test:ollama:chat` | Ollama chat test |
+| `npm run test:ha:reachability` | Home Assistant connectivity test |
+| `npm run test:ha:mcp-tools` | MCP tools list test |
 
-Example:
-```text
-Mach den Schreibtisch aus
-/mcp turn off desk light
-/mcp tools
-```
+## Configuration
 
-## 4. Security Notes
+All configuration via environment variables. See `.env.example` for full reference.
 
-- Telegram uses long polling, so no webhook port is required.
-- Set `ALLOWED_TELEGRAM_USER_IDS`, otherwise any Telegram user with bot access can use it.
-- Keep `OLLAMA_BASE_URL` reachable only from internal networks.
-- Use MCP servers only with authentication (`MCP_SERVERS_JSON` / `HA_MCP_API_KEY`).
-- Optional guardrails via `MCP_TOOL_POLICY_JSON` (allow/deny tools, require explicit `/mcp` for selected tools).
-
-## 5. Smoke Tests
-
-Check if the Ollama container/API is reachable:
-
-```bash
-npm run test:ollama:reachability
-```
-
-Send one chat request to Ollama (`/api/chat`) and verify a model response:
-
-```bash
-npm run test:ollama:chat
-```
-
-Check if Home Assistant is reachable from the backend host:
-
-```bash
-npm run test:ha:reachability
-```
-
-List available Home Assistant MCP tools:
-
-```bash
-npm run test:ha:mcp-tools
-```
+Key variables:
+- `LLM_PROVIDER` — `gemini` (default) or `ollama`
+- `GEMINI_API_KEY` — Google AI Studio API key
+- `GEMINI_MODEL` — Model name (default: `gemini-2.5-flash`)
+- `OLLAMA_BASE_URL` / `OLLAMA_MODEL` — Local Ollama config
+- `TELEGRAM_BOT_TOKEN` / `ALLOWED_TELEGRAM_USER_IDS` — Telegram config
+- `MCP_SERVERS_JSON` — MCP server configuration

@@ -1,17 +1,17 @@
-import { ollamaService } from '../services/ollama.service.js';
+import { llmService } from '../services/llm.service.js';
 import { mcpHostService } from '../services/mcp-host.service.js';
 import { toolRegistry } from './tool-registry.js';
-import { config } from '../config.js';
+import { chatHistory } from './chat-history.js';
+import { config, type LlmProviderName } from '../config.js';
 import { logger } from '../logger.js';
-import type { OllamaMessage, OllamaToolDefinition } from '../services/ollama.service.js';
+import type { LlmMessage, ToolDefinition } from '../services/llm.types.js';
 
-const SYSTEM_PROMPT = `/no_think
-You are MaikBot, a local AI assistant running on a home server.
+const SYSTEM_PROMPT = `You are MaikBot, a local AI assistant running on a home server.
 Rules:
 1) Respond briefly and clearly in German unless the user asks for another language.
 2) You have access to tools (smart home, shell, etc.). Use them when the user's request requires it.
 3) Do not invent tool results or device states. Only report what tools return.
-4) If a tool call fails, you may retry with different arguments or explain the error.
+4) If a tool call fails with a name/match error, call GetLiveContext first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
 5) For shell commands, prefer concise output (e.g. use flags like -h, --no-pager, head/tail).
 6) On errors, provide concrete next steps.`;
 
@@ -21,15 +21,7 @@ export interface AssistantResponse {
 }
 
 export class Assistant {
-  /**
-   * Main entry point for every user message.
-   * Runs the native Ollama tool-calling loop:
-   * 1) Load tools from registry (MCP + built-in)
-   * 2) Send messages + tools to Ollama
-   * 3) While model returns tool_calls (up to max): execute, feed results back
-   * 4) Return final text
-   */
-  async handleTextWithTrace(input: string): Promise<AssistantResponse> {
+  async handleTextWithTrace(chatId: number, input: string): Promise<AssistantResponse> {
     const trimmed = input.trim();
     const trace: string[] = [];
 
@@ -37,7 +29,29 @@ export class Assistant {
       return { reply: 'Bitte sende eine Nachricht.', trace };
     }
 
-    // /mcp tools — debug command to list available tools
+    // /model — switch or show LLM provider
+    if (trimmed.startsWith('/model')) {
+      return this.handleModelCommand(trimmed, trace);
+    }
+
+    // /clear — reset chat history
+    if (trimmed === '/clear') {
+      chatHistory.clear(chatId);
+      trace.push('action: history_cleared');
+      return { reply: 'Chat-Verlauf gelöscht.', trace };
+    }
+
+    // /status — show chat stats
+    if (trimmed === '/status') {
+      const stats = chatHistory.getStats(chatId);
+      trace.push('action: status');
+      return {
+        reply: `Modell: ${llmService.modelLabel}\nNachrichten im Kontext: ${stats.messageCount}\nGeschätzte Tokens: ${stats.estimatedTokens}`,
+        trace,
+      };
+    }
+
+    // /mcp tools — debug command
     if (trimmed.startsWith('/mcp ')) {
       const instruction = trimmed.replace(/^\/mcp\s+/i, '').trim();
       if (instruction === 'tools' || instruction === 'help') {
@@ -49,36 +63,58 @@ export class Assistant {
 
     // Load all tools (MCP + built-in)
     const { definitions, dispatch } = await toolRegistry.loadTools();
+    trace.push(`provider: ${llmService.modelLabel}`);
     trace.push(`tools_loaded: ${definitions.length}`);
 
-    // Build initial messages
-    const messages: OllamaMessage[] = [
+    // Build messages: system + history + current user message
+    const history = chatHistory.getHistory(chatId);
+    trace.push(`history_messages: ${history.length}`);
+
+    const messages: LlmMessage[] = [
       { role: 'system', content: SYSTEM_PROMPT },
+      ...history,
       { role: 'user', content: trimmed },
     ];
 
-    // Tool-calling loop
+    // Run tool-calling loop
+    const newMessages: LlmMessage[] = [{ role: 'user', content: trimmed }];
+    const { reply, turnMessages } = await this.runToolLoop(messages, definitions, dispatch, trace);
+
+    // Save this turn to history (user message + all tool interactions + final assistant reply)
+    newMessages.push(...turnMessages);
+    chatHistory.append(chatId, newMessages);
+
+    return { reply, trace };
+  }
+
+  private async runToolLoop(
+    messages: LlmMessage[],
+    definitions: ToolDefinition[],
+    dispatch: Map<string, (args: Record<string, unknown>) => Promise<{ ok: boolean; output: string }>>,
+    trace: string[]
+  ): Promise<{ reply: string; turnMessages: LlmMessage[] }> {
     let callCount = 0;
-    const maxCalls = config.ollamaMaxToolCalls;
+    const maxCalls = config.llmMaxToolCalls;
+    const turnMessages: LlmMessage[] = [];
 
     while (true) {
-      const result = await ollamaService.chatWithTools(messages, definitions);
+      const result = await llmService.chat(messages, definitions);
 
-      // No tool calls — final response
       if (result.toolCalls.length === 0) {
         trace.push('execution_path: final');
         const reply = result.content || 'Keine Antwort vom Modell.';
-        return { reply, trace };
+        turnMessages.push({ role: 'assistant', content: reply });
+        return { reply, turnMessages };
       }
 
-      // Append the assistant message (with tool_calls) to conversation
-      messages.push({
+      const assistantMsg: LlmMessage = {
         role: 'assistant',
         content: result.content,
-        tool_calls: result.toolCalls,
-      });
+        toolCalls: result.toolCalls,
+      };
+      messages.push(assistantMsg);
+      turnMessages.push(assistantMsg);
 
-      // Execute each tool call
       for (const tc of result.toolCalls) {
         callCount++;
         const toolName = tc.function.name;
@@ -108,29 +144,54 @@ export class Assistant {
           }
         }
 
-        // Append tool result to conversation
-        messages.push({
-          role: 'tool',
-          content: output,
-          tool_name: toolName,
-        });
+        const toolMsg: LlmMessage = { role: 'tool', content: output, toolName };
+        messages.push(toolMsg);
+        turnMessages.push(toolMsg);
       }
 
-      // Safety: max tool calls reached — force a final response without tools
       if (callCount >= maxCalls) {
         trace.push(`max_tool_calls_reached: ${maxCalls}`);
         logger.warn({ callCount, maxCalls }, 'Max tool calls reached, forcing final response');
-        const finalResult = await ollamaService.chatWithTools(messages, []);
-        return {
-          reply: finalResult.content || 'Tool-Call-Limit erreicht. Bitte versuche es erneut.',
-          trace,
-        };
+        const finalResult = await llmService.chat(messages, []);
+        const reply = finalResult.content || 'Tool-Call-Limit erreicht. Bitte versuche es erneut.';
+        turnMessages.push({ role: 'assistant', content: reply });
+        return { reply, turnMessages };
       }
     }
   }
 
-  async handleText(input: string): Promise<string> {
-    const result = await this.handleTextWithTrace(input);
+  private handleModelCommand(input: string, trace: string[]): AssistantResponse {
+    const arg = input.replace(/^\/model\s*/i, '').trim().toLowerCase();
+
+    if (!arg) {
+      const current = llmService.modelLabel;
+      const available = llmService.getAvailableProviders().join(', ');
+      trace.push('action: model_info');
+      return {
+        reply: `Aktuelles Modell: ${current}\nVerfügbar: ${available}\n\nWechsel mit /model ollama oder /model gemini`,
+        trace,
+      };
+    }
+
+    const available = llmService.getAvailableProviders();
+    if (!available.includes(arg as LlmProviderName)) {
+      trace.push(`action: model_switch_failed (${arg})`);
+      return {
+        reply: `Unbekannter Provider: "${arg}"\nVerfügbar: ${available.join(', ')}`,
+        trace,
+      };
+    }
+
+    llmService.switchProvider(arg as LlmProviderName);
+    trace.push(`action: model_switched to ${arg}`);
+    return {
+      reply: `Modell gewechselt zu: ${llmService.modelLabel}`,
+      trace,
+    };
+  }
+
+  async handleText(chatId: number, input: string): Promise<string> {
+    const result = await this.handleTextWithTrace(chatId, input);
     return result.reply;
   }
 }

@@ -1,27 +1,6 @@
 import { config } from '../config.js';
-
-export interface OllamaMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
-  tool_calls?: OllamaToolCall[];
-  tool_name?: string;
-}
-
-export interface OllamaToolCall {
-  function: {
-    name: string;
-    arguments: Record<string, unknown>;
-  };
-}
-
-export interface OllamaToolDefinition {
-  type: 'function';
-  function: {
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-  };
-}
+import { logger } from '../logger.js';
+import type { LlmProvider, LlmMessage, ToolDefinition, ToolCall, ChatResult } from './llm.types.js';
 
 interface OllamaChatResponse {
   message: {
@@ -36,48 +15,35 @@ interface OllamaChatResponse {
   };
 }
 
-export interface ChatResult {
-  content: string;
-  toolCalls: OllamaToolCall[];
-}
+export class OllamaService implements LlmProvider {
+  readonly name = 'ollama';
 
-export class OllamaService {
-  /**
-   * Simple text generation (system + user prompt, no tools).
-   * Kept for plain chat without tool calling.
-   */
-  async generate(systemPrompt: string, userPrompt: string): Promise<string> {
-    const result = await this.chatWithTools(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      []
-    );
-    return result.content;
-  }
-
-  /**
-   * Native Ollama tool-calling chat. Sends messages + tool definitions,
-   * returns the assistant content and any tool_calls the model requested.
-   */
-  async chatWithTools(
-    messages: OllamaMessage[],
-    tools: OllamaToolDefinition[]
-  ): Promise<ChatResult> {
+  async chat(messages: LlmMessage[], tools: ToolDefinition[]): Promise<ChatResult> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.ollamaTimeoutMs);
 
     try {
       const body: Record<string, unknown> = {
         model: config.ollamaModel,
-        messages,
+        messages: messages.map((m) => {
+          const msg: Record<string, unknown> = { role: m.role, content: m.content };
+          if (m.toolCalls) msg.tool_calls = m.toolCalls;
+          if (m.toolName) msg.tool_name = m.toolName;
+          return msg;
+        }),
         stream: false,
+        think: false,
       };
 
       if (tools.length > 0) {
         body.tools = tools;
       }
+
+      const startedAt = Date.now();
+      logger.info(
+        { model: body.model, toolCount: tools.length, msgCount: messages.length },
+        'Sending request to Ollama'
+      );
 
       const response = await fetch(`${config.ollamaBaseUrl}/api/chat`, {
         method: 'POST',
@@ -93,13 +59,20 @@ export class OllamaService {
 
       const data = (await response.json()) as OllamaChatResponse;
 
-      const toolCalls: OllamaToolCall[] = (data.message.tool_calls ?? []).map(
-        (tc) => ({
-          function: {
-            name: tc.function.name,
-            arguments: tc.function.arguments ?? {},
-          },
-        })
+      const toolCalls: ToolCall[] = (data.message.tool_calls ?? []).map((tc) => ({
+        function: {
+          name: tc.function.name,
+          arguments: tc.function.arguments ?? {},
+        },
+      }));
+
+      logger.info(
+        {
+          durationMs: Date.now() - startedAt,
+          contentLen: (data.message.content ?? '').length,
+          toolCallCount: toolCalls.length,
+        },
+        'Ollama response received'
       );
 
       return {
