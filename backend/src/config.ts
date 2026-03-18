@@ -4,11 +4,15 @@ import { z } from 'zod';
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   ALLOWED_TELEGRAM_USER_IDS: z.string().default(''),
+  TELEGRAM_ALLOW_EMPTY_ALLOWLIST: z.coerce.boolean().default(false),
   OLLAMA_BASE_URL: z.string().url().default('http://127.0.0.1:11434'),
   OLLAMA_MODEL: z.string().min(1).default('qwen2.5:7b-instruct'),
   OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
   MCP_SERVERS_JSON: z.string().optional(),
   MCP_TOOL_POLICY_JSON: z.string().optional(),
+  MCP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  OLLAMA_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(10),
+  SHELL_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   TELEGRAM_SHOW_AGENT_TRACE: z.coerce.boolean().default(false),
   HA_MCP_BASE_URL: z.string().url().optional(),
   HA_MCP_API_KEY: z.string().optional(),
@@ -120,6 +124,7 @@ const mcpToolPolicy = parseMcpToolPolicy();
 export const config = {
   telegramBotToken: env.TELEGRAM_BOT_TOKEN,
   allowedTelegramUserIds: new Set<number>(allowedUserIds),
+  telegramAllowEmptyAllowlist: env.TELEGRAM_ALLOW_EMPTY_ALLOWLIST,
   ollamaBaseUrl: env.OLLAMA_BASE_URL.replace(/\/$/, ''),
   ollamaModel: env.OLLAMA_MODEL,
   ollamaTimeoutMs: env.OLLAMA_TIMEOUT_MS,
@@ -127,6 +132,9 @@ export const config = {
   haMcpApiKey: env.HA_MCP_API_KEY,
   mcpServers,
   mcpToolPolicy,
+  mcpTimeoutMs: env.MCP_TIMEOUT_MS,
+  ollamaMaxToolCalls: env.OLLAMA_MAX_TOOL_CALLS,
+  shellTimeoutMs: env.SHELL_TIMEOUT_MS,
   telegramShowAgentTrace: env.TELEGRAM_SHOW_AGENT_TRACE,
   logLevel: env.LOG_LEVEL,
 };

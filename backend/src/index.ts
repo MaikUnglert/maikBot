@@ -22,7 +22,16 @@ async function bootstrap(): Promise<void> {
       'Telegram allowlist is active'
     );
   } else {
-    logger.warn('Telegram allowlist is empty: every Telegram user can talk to the bot');
+    if (config.telegramAllowEmptyAllowlist) {
+      logger.warn(
+        'Telegram allowlist is empty and TELEGRAM_ALLOW_EMPTY_ALLOWLIST=true: every Telegram user can talk to the bot'
+      );
+    } else {
+      logger.fatal(
+        'Telegram allowlist is empty. Refusing to start. Set ALLOWED_TELEGRAM_USER_IDS or explicitly allow this by setting TELEGRAM_ALLOW_EMPTY_ALLOWLIST=true.'
+      );
+      process.exit(1);
+    }
   }
 
   startTelegramBot();
