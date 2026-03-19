@@ -1,9 +1,9 @@
-# maikBot Quickstart (Telegram + Ollama + MCP)
+# maikBot Quickstart
 
-## 1. Install Backend
+## 1. Install
 
 ```bash
-cd /home/maik/Projects/maikBot/backend
+cd backend
 npm install
 cp .env.example .env
 ```
@@ -11,16 +11,15 @@ cp .env.example .env
 ## 2. Configure `.env`
 
 Required:
-- `TELEGRAM_BOT_TOKEN`
-- `OLLAMA_BASE_URL`
-- `OLLAMA_MODEL`
+- `TELEGRAM_BOT_TOKEN` — from @BotFather
+- `GEMINI_API_KEY` — from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+- `ALLOWED_TELEGRAM_USER_IDS` — your Telegram user ID
 
-Recommended:
-- `ALLOWED_TELEGRAM_USER_IDS` (your Telegram user ID)
+Optional (Home Assistant):
+- `MCP_SERVERS_JSON` or `HA_MCP_BASE_URL` + `HA_MCP_API_KEY`
 
-Optional for Home Assistant MCP server:
-- `HA_MCP_BASE_URL`
-- `HA_MCP_API_KEY`
+Optional (local Ollama fallback):
+- `OLLAMA_BASE_URL`, `OLLAMA_MODEL`
 
 ## 3. Start
 
@@ -30,19 +29,22 @@ npm run dev
 
 ## 4. Usage
 
-- Regular Telegram message to the bot: response from Ollama
-- `/ha tools`: lists available Home Assistant MCP tools
-- `/ha on <name>` and `/ha off <name>`: convenience tool calls
-- `/ha <ToolName> <JSON args>`: direct MCP tool call
+Send messages to the bot on Telegram. It responds using the active LLM provider (default: Gemini).
 
-Example:
-```text
-/ha on kitchen light
-/ha HassLightSet {"name":"kitchen light","brightness":60}
+Commands:
+- `/model` — show current provider
+- `/model gemini` / `/model ollama` — switch provider
+- `/clear` — reset conversation history
+- `/status` — show context stats
+- `/mcp tools` — list available MCP tools
+
+## 5. Smoke Tests
+
+```bash
+npm run test:ollama:reachability
+npm run test:ollama:chat
+npm run test:ha:reachability
+npm run test:ha:mcp-tools
+npm run test:shell
+npm run test:registry
 ```
-
-## 5. Security Checks
-
-1. Ollama port reachable only internally (no WAN port forwarding).
-2. Allowlist configured (`ALLOWED_TELEGRAM_USER_IDS`).
-3. Home Assistant MCP endpoint (`/api/mcp`) is internal and authenticated.

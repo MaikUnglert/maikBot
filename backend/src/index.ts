@@ -1,20 +1,21 @@
 import { startTelegramBot } from './services/telegram-bot.service.js';
 import { logger } from './logger.js';
-import { ollamaService } from './services/ollama.service.js';
+import { llmService } from './services/llm.service.js';
 import { config } from './config.js';
 
 async function bootstrap(): Promise<void> {
   logger.info('Bootstrapping maikBot backend');
 
-  const ollamaHealthy = await ollamaService.healthCheck();
-  if (!ollamaHealthy) {
-    logger.warn(
-      { ollamaBaseUrl: config.ollamaBaseUrl },
-      'Ollama is not reachable at startup'
-    );
-  } else {
-    logger.info({ model: config.ollamaModel }, 'Ollama is reachable');
+  const health = await llmService.healthCheckAll();
+  for (const [provider, ok] of Object.entries(health)) {
+    if (ok) {
+      logger.info({ provider }, 'LLM provider is reachable');
+    } else {
+      logger.warn({ provider }, 'LLM provider is not reachable');
+    }
   }
+
+  logger.info({ active: llmService.modelLabel }, 'Active LLM provider');
 
   if (config.allowedTelegramUserIds.size > 0) {
     logger.info(

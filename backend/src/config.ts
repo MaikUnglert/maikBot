@@ -6,17 +6,27 @@ const booleanString = z
   .transform((val) => val.toLowerCase() === 'true' || val === '1')
   .pipe(z.boolean());
 
+const llmProviderEnum = z.enum(['ollama', 'gemini']).default('ollama');
+
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   ALLOWED_TELEGRAM_USER_IDS: z.string().default(''),
   TELEGRAM_ALLOW_EMPTY_ALLOWLIST: booleanString.default('false'),
+
+  LLM_PROVIDER: llmProviderEnum,
+
   OLLAMA_BASE_URL: z.string().url().default('http://127.0.0.1:11434'),
   OLLAMA_MODEL: z.string().min(1).default('qwen2.5:7b-instruct'),
   OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
+
+  GEMINI_API_KEY: z.string().optional(),
+  GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
+  GEMINI_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+
   MCP_SERVERS_JSON: z.string().optional(),
   MCP_TOOL_POLICY_JSON: z.string().optional(),
   MCP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
-  OLLAMA_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(10),
+  LLM_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(10),
   SHELL_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   TELEGRAM_SHOW_AGENT_TRACE: booleanString.default('false'),
   HA_MCP_BASE_URL: z.string().url().optional(),
@@ -46,8 +56,9 @@ const allowedUserIds = env.ALLOWED_TELEGRAM_USER_IDS
 
 export interface McpServerConfig {
   name: string;
-  baseUrl: string;
-  apiKey: string;
+  url?: string;
+  baseUrl?: string;
+  apiKey?: string;
 }
 
 export interface McpToolPolicy {
@@ -75,16 +86,13 @@ function parseMcpServers(): McpServerConfig[] {
         }
         const record = item as Record<string, unknown>;
         const name = String(record.name ?? '').trim();
-        const baseUrl = String(record.baseUrl ?? '').trim();
-        const apiKey = String(record.apiKey ?? '').trim();
-        if (!name || !baseUrl || !apiKey) {
-          throw new Error(`MCP server entry at index ${index} requires name, baseUrl, apiKey`);
+        const url = record.url ? String(record.url).trim().replace(/\/$/, '') : undefined;
+        const baseUrl = record.baseUrl ? String(record.baseUrl).trim().replace(/\/$/, '') : undefined;
+        const apiKey = record.apiKey ? String(record.apiKey).trim() : undefined;
+        if (!name || (!url && !baseUrl)) {
+          throw new Error(`MCP server entry at index ${index} requires name and either url or baseUrl`);
         }
-        return {
-          name,
-          baseUrl: baseUrl.replace(/\/$/, ''),
-          apiKey,
-        };
+        return { name, url, baseUrl, apiKey };
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -126,19 +134,29 @@ function parseMcpToolPolicy(): McpToolPolicyConfig {
 
 const mcpToolPolicy = parseMcpToolPolicy();
 
+export type LlmProviderName = 'ollama' | 'gemini';
+
 export const config = {
   telegramBotToken: env.TELEGRAM_BOT_TOKEN,
   allowedTelegramUserIds: new Set<number>(allowedUserIds),
   telegramAllowEmptyAllowlist: env.TELEGRAM_ALLOW_EMPTY_ALLOWLIST,
+
+  defaultLlmProvider: env.LLM_PROVIDER as LlmProviderName,
+
   ollamaBaseUrl: env.OLLAMA_BASE_URL.replace(/\/$/, ''),
   ollamaModel: env.OLLAMA_MODEL,
   ollamaTimeoutMs: env.OLLAMA_TIMEOUT_MS,
+
+  geminiApiKey: env.GEMINI_API_KEY,
+  geminiModel: env.GEMINI_MODEL,
+  geminiTimeoutMs: env.GEMINI_TIMEOUT_MS,
+
   haMcpBaseUrl: env.HA_MCP_BASE_URL?.replace(/\/$/, ''),
   haMcpApiKey: env.HA_MCP_API_KEY,
   mcpServers,
   mcpToolPolicy,
   mcpTimeoutMs: env.MCP_TIMEOUT_MS,
-  ollamaMaxToolCalls: env.OLLAMA_MAX_TOOL_CALLS,
+  llmMaxToolCalls: env.LLM_MAX_TOOL_CALLS,
   shellTimeoutMs: env.SHELL_TIMEOUT_MS,
   telegramShowAgentTrace: env.TELEGRAM_SHOW_AGENT_TRACE,
   logLevel: env.LOG_LEVEL,

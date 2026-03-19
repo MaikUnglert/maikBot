@@ -2,21 +2,16 @@
 
 Local AI assistant with a security-first design:
 - Telegram as chat channel via long polling (no open inbound port)
-- Ollama in the local Proxmox/LXC network
-- MCP as an optional multi-skill tool layer (currently Home Assistant, later e.g. Paperless)
+- Multi-provider LLM: **Gemini** (cloud, fast) or **Ollama** (local, private) — switchable at runtime
+- MCP as an optional multi-skill tool layer (currently Home Assistant)
+- Native tool calling with multi-turn error recovery
+- Per-chat conversation history with automatic context management
 
-## Target Architecture
-
-Detailed architecture, rationale, interfaces, and diagrams:
-- `docs/ARCHITECTURE.md`
-- `docs/diagrams/deployment.mmd`
-- `docs/diagrams/message-flow.mmd`
-
-### Deployment Diagram
+## Architecture
 
 ```mermaid
 flowchart LR
-    User[User on Telegram App]
+    User[Telegram User]
     TG[Telegram Cloud API]
 
     subgraph LAN[Home LAN]
@@ -28,87 +23,98 @@ flowchart LR
           OL["Ollama API<br/>:11434"]
         end
       end
-
-      MCP["Home Assistant MCP Server<br/>(auth protected)"]
-      subgraph Skills[Skill Backends]
-        HA[Home Assistant]
-        PL["Paperless - future"]
-      end
+      MCP["Home Assistant<br/>MCP Server"]
     end
 
-    User --> TG
-    MB -->|Telegram API long polling| TG
-    MB -->|Internal HTTP| OL
-    MB -->|Internal HTTP with auth| MCP
-    MCP -->|Home Assistant tools| Skills
+    Cloud["Google Gemini API"]
 
+    User --> TG
+    MB -->|long polling| TG
+    MB -.->|if provider=ollama| OL
+    MB -.->|if provider=gemini| Cloud
+    MB -->|MCP tools/call| MCP
 ```
 
-### Message Flow (Native Tool Calling)
+### Message Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as Telegram User
-    participant TG as Telegram Cloud
     participant B as maikBot Backend
-    participant TR as Tool Registry
-    participant O as Ollama (LXC)
-    participant M as Home Assistant MCP Server
-    participant SH as Local Shell
+    participant LLM as LLM (Gemini / Ollama)
+    participant T as Tools (MCP / Shell)
 
-    U->>TG: Send message
-    B->>TG: getUpdates (long polling)
-    TG-->>B: Update with message
-
-    B->>TR: loadTools()
-    TR-->>B: tool definitions (MCP + built-in)
-    B->>O: POST /api/chat (messages + tools)
+    U->>B: Message
+    B->>B: Load chat history + tools
+    B->>LLM: messages + tool definitions
 
     loop Tool-calling loop (max N)
-        O-->>B: tool_calls (e.g. HassTurnOn, shell_exec)
-        alt MCP tool
-            B->>M: tools/call via JSON-RPC
-            M-->>B: Tool result
-        else Built-in tool (shell_exec)
-            B->>SH: child_process.exec
-            SH-->>B: stdout/stderr
-        end
-        B->>O: POST /api/chat (messages + role:tool results)
+        LLM-->>B: tool_calls
+        B->>T: Execute tool
+        T-->>B: Result
+        B->>LLM: messages + tool results
     end
 
-    O-->>B: Final assistant text
-    B->>TG: sendMessage
-    TG-->>U: Bot response
+    LLM-->>B: Final text
+    B->>B: Save to chat history
+    B->>U: Reply
 ```
 
-## Security Principles
+## Features
 
-1. Do not expose Ollama directly to the internet.
-2. Use Telegram long polling instead of Telegram webhooks.
-3. Enable a Telegram user allowlist (`ALLOWED_TELEGRAM_USER_IDS`).
-4. Use MCP only internally and only with API key/TLS.
-5. Keep Proxmox/LXC firewalls on default-deny and allow only required flows.
+| Feature | Description |
+|---------|-------------|
+| Multi-provider LLM | Gemini (cloud) and Ollama (local), switchable via `/model` |
+| Native tool calling | LLM decides autonomously when to use tools |
+| Chat history | Per-chat conversation context with automatic trimming |
+| MCP integration | Home Assistant devices via MCP protocol |
+| Shell tool | Run arbitrary commands on the server via `shell_exec` |
+| Security | Telegram allowlist, no inbound ports, MCP auth + policy |
 
-## Tool Calling Architecture
+## Telegram Commands
 
-maikBot uses **native Ollama tool calling** (similar to OpenClaw/NanoClaw):
-- The model receives MCP tools + built-in tools as structured `tools[]` definitions (not prompt text).
-- The model decides autonomously whether to call tools or respond directly.
-- Tool calls are executed by the backend (MCP for Home Assistant, `child_process` for shell), results are fed back as `role:"tool"` messages.
-- The model can chain multiple tool calls per user message (up to `OLLAMA_MAX_TOOL_CALLS`).
-- If a tool fails, the model sees the error and can retry or explain.
-
-### Available tool types
-- **MCP tools**: any tool exposed by configured MCP servers (e.g. Home Assistant: `HassTurnOn`, `HassTurnOff`, `GetLiveContext`, etc.)
-- **Built-in tools**: `shell_exec` — runs arbitrary shell commands on the backend host
-
-### Key files
-- `backend/src/core/tool-registry.ts`: unified registry merging MCP + built-in tools
-- `backend/src/core/tools/shell.ts`: shell_exec implementation
-- `backend/src/core/assistant.ts`: tool-calling loop orchestrator
-- `backend/src/services/ollama.service.ts`: Ollama client with native tool-calling support
+| Command | Description |
+|---------|-------------|
+| `/model` | Show current LLM provider |
+| `/model gemini` | Switch to Gemini |
+| `/model ollama` | Switch to Ollama |
+| `/clear` | Clear chat history |
+| `/status` | Show context stats (messages, tokens) |
+| `/mcp tools` | List available MCP tools |
 
 ## Quick Start
 
-See `QUICKSTART.md`.
+```bash
+cd backend
+npm install
+cp .env.example .env   # fill in your values
+npm run dev
+```
+
+Required in `.env`:
+- `TELEGRAM_BOT_TOKEN` — from @BotFather
+- `GEMINI_API_KEY` — from [aistudio.google.com/apikey](https://aistudio.google.com/apikey)
+
+See `.env.example` for all options.
+
+## Security Principles
+
+1. No inbound ports — Telegram long polling only.
+2. Ollama stays internal (LAN only, no WAN exposure).
+3. Telegram user allowlist (`ALLOWED_TELEGRAM_USER_IDS`).
+4. MCP access is authenticated and policy-filtered.
+5. Secrets in `.env`, never committed to git.
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `backend/src/core/assistant.ts` | Main orchestrator, tool-calling loop, commands |
+| `backend/src/core/chat-history.ts` | Per-chat conversation history + context management |
+| `backend/src/core/tool-registry.ts` | Unified registry for MCP + built-in tools |
+| `backend/src/services/llm.service.ts` | LLM router (Gemini / Ollama) with runtime switching |
+| `backend/src/services/gemini.service.ts` | Google Gemini API client |
+| `backend/src/services/ollama.service.ts` | Ollama API client |
+| `backend/src/core/tools/shell.ts` | shell_exec tool implementation |
+| `backend/src/config.ts` | Environment config with Zod validation |

@@ -44,7 +44,18 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
   }
 
   try {
-    const response = await assistant.handleTextWithTrace(text);
+    await bot.sendChatAction(chatId, 'typing');
+    const typingInterval = setInterval(() => {
+      bot.sendChatAction(chatId, 'typing').catch(() => {});
+    }, 4500);
+
+    let response;
+    try {
+      response = await assistant.handleTextWithTrace(chatId, text);
+    } finally {
+      clearInterval(typingInterval);
+    }
+
     const traceBlock =
       config.telegramShowAgentTrace && response.trace.length > 0
         ? `\n\n---\nAgent Trace:\n${response.trace.map((line) => `- ${line}`).join('\n')}`
