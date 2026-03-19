@@ -10,6 +10,8 @@ export interface ToolCall {
     name: string;
     arguments: Record<string, unknown>;
   };
+  /** Gemini 3 thought signature — must be preserved and sent back */
+  thoughtSignature?: string;
 }
 
 export interface ToolDefinition {

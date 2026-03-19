@@ -21,6 +21,7 @@ const envSchema = z.object({
 
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
+  GEMINI_FALLBACK_MODEL: z.string().optional(),
   GEMINI_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
 
   MCP_SERVERS_JSON: z.string().optional(),
@@ -73,9 +74,10 @@ export interface McpToolPolicyConfig {
 }
 
 function parseMcpServers(): McpServerConfig[] {
-  if (env.MCP_SERVERS_JSON) {
+  const raw = env.MCP_SERVERS_JSON?.trim();
+  if (raw) {
     try {
-      const parsed = JSON.parse(env.MCP_SERVERS_JSON) as unknown;
+      const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed)) {
         throw new Error('MCP_SERVERS_JSON must be a JSON array');
       }
@@ -96,7 +98,8 @@ function parseMcpServers(): McpServerConfig[] {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Invalid MCP_SERVERS_JSON: ${message}`);
+      console.warn(`[config] Invalid MCP_SERVERS_JSON, starting without MCP: ${message}`);
+      return [];
     }
   }
 
@@ -149,6 +152,7 @@ export const config = {
 
   geminiApiKey: env.GEMINI_API_KEY,
   geminiModel: env.GEMINI_MODEL,
+  geminiFallbackModel: env.GEMINI_FALLBACK_MODEL,
   geminiTimeoutMs: env.GEMINI_TIMEOUT_MS,
 
   haMcpBaseUrl: env.HA_MCP_BASE_URL?.replace(/\/$/, ''),

@@ -24,7 +24,13 @@ async function safeSendMessage(
   try {
     await bot.sendMessage(chatId, text, options);
   } catch (error) {
-    logger.error({ err: error, chatId }, 'Failed to send Telegram message');
+    logger.error({ err: error, chatId }, 'Failed to send Telegram message, retrying without formatting');
+    // Fallback without parse_mode in case of markdown parsing errors
+    try {
+      await bot.sendMessage(chatId, text, { reply_to_message_id: options?.reply_to_message_id });
+    } catch (fallbackError) {
+      logger.error({ err: fallbackError, chatId }, 'Failed to send Telegram message completely');
+    }
   }
 }
 
@@ -46,7 +52,7 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
   try {
     await bot.sendChatAction(chatId, 'typing');
     const typingInterval = setInterval(() => {
-      bot.sendChatAction(chatId, 'typing').catch(() => {});
+      bot.sendChatAction(chatId, 'typing').catch(() => { });
     }, 4500);
 
     let response;
@@ -60,8 +66,13 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
       config.telegramShowAgentTrace && response.trace.length > 0
         ? `\n\n---\nAgent Trace:\n${response.trace.map((line) => `- ${line}`).join('\n')}`
         : '';
-    await safeSendMessage(bot, chatId, `${response.reply}${traceBlock}`.slice(0, 4096), {
+
+    // Convert standard markdown **bold** to Telegram's *bold*
+    const formattedReply = response.reply.replace(/\*\*(.*?)\*\*/g, '*$1*');
+
+    await safeSendMessage(bot, chatId, `${formattedReply}${traceBlock}`.slice(0, 4096), {
       reply_to_message_id: msg.message_id,
+      parse_mode: 'Markdown'
     });
   } catch (error) {
     logger.error({ err: error }, 'Failed to process Telegram message');
@@ -83,6 +94,13 @@ export function startTelegramBot(): TelegramBot {
       },
     },
   });
+
+  bot.setMyCommands([
+    { command: '/clear', description: 'Chat-Verlauf löschen' },
+    { command: '/model', description: 'KI-Modell wechseln (ollama/gemini)' },
+    { command: '/status', description: 'Aktuellen Status anzeigen' },
+    { command: '/mcp', description: 'Verfügbare MCP Tools auflisten (z.B. /mcp tools)' }
+  ]).catch(err => logger.error({ err }, 'Failed to set Telegram commands'));
 
   bot.on('message', (msg) => {
     void handleMessage(bot, msg).catch((error) => {

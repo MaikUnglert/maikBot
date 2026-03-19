@@ -6,6 +6,7 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 interface GeminiPart {
   text?: string;
+  thoughtSignature?: string;
   functionCall?: { name: string; args: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
 }
@@ -46,9 +47,13 @@ function toGeminiContents(messages: LlmMessage[]): {
         if (msg.content) parts.push({ text: msg.content });
         if (msg.toolCalls) {
           for (const tc of msg.toolCalls) {
-            parts.push({
+            const fcPart: GeminiPart = {
               functionCall: { name: tc.function.name, args: tc.function.arguments },
-            });
+            };
+            if (tc.thoughtSignature) {
+              fcPart.thoughtSignature = tc.thoughtSignature;
+            }
+            parts.push(fcPart);
           }
         }
         if (parts.length > 0) contents.push({ role: 'model', parts });
@@ -123,12 +128,16 @@ function parseGeminiResponse(data: GeminiResponse): ChatResult {
       content += part.text;
     }
     if (part.functionCall) {
-      toolCalls.push({
+      const tc: ToolCall = {
         function: {
           name: part.functionCall.name,
           arguments: part.functionCall.args ?? {},
         },
-      });
+      };
+      if (part.thoughtSignature) {
+        tc.thoughtSignature = part.thoughtSignature;
+      }
+      toolCalls.push(tc);
     }
   }
 
@@ -142,9 +151,6 @@ export class GeminiService implements LlmProvider {
     const apiKey = config.geminiApiKey;
     if (!apiKey) throw new Error('GEMINI_API_KEY is not configured');
 
-    const model = config.geminiModel;
-    const url = `${GEMINI_BASE}/models/${model}:generateContent?key=${apiKey}`;
-
     const { systemInstruction, contents } = toGeminiContents(messages);
     const geminiTools = toGeminiFunctionDeclarations(tools);
 
@@ -152,13 +158,43 @@ export class GeminiService implements LlmProvider {
     if (systemInstruction) body.system_instruction = systemInstruction;
     if (geminiTools) body.tools = geminiTools;
 
+    const primaryModel = config.geminiModel;
+    const fallbackModel = config.geminiFallbackModel;
+
+    try {
+      return await this.executeChat(primaryModel, apiKey, body, tools.length, messages.length);
+    } catch (error) {
+      if (
+        fallbackModel &&
+        error instanceof Error &&
+        error.message.includes('Gemini HTTP 429') &&
+        primaryModel !== fallbackModel
+      ) {
+        logger.warn(
+          { primaryModel, fallbackModel },
+          'Rate limit exceeded (429) on primary model. Retrying with fallback model.'
+        );
+        return await this.executeChat(fallbackModel, apiKey, body, tools.length, messages.length);
+      }
+      throw error;
+    }
+  }
+
+  private async executeChat(
+    model: string,
+    apiKey: string,
+    body: Record<string, unknown>,
+    toolCount: number,
+    msgCount: number
+  ): Promise<ChatResult> {
+    const url = `${GEMINI_BASE}/models/${model}:generateContent?key=${apiKey}`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.geminiTimeoutMs);
 
     try {
       const startedAt = Date.now();
       logger.info(
-        { model, toolCount: tools.length, msgCount: messages.length },
+        { model, toolCount, msgCount },
         'Sending request to Gemini'
       );
 

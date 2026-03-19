@@ -122,9 +122,26 @@ export class Assistant {
       (tc) => tc.function.name === 'route_to_tools'
     );
 
-    if (!routeCall) {
+    let selectedCategories: string[] = [];
+
+    if (routeCall) {
+      const args = routeCall.function.arguments as { categories?: string[] };
+      selectedCategories = (args.categories ?? []).filter((id) =>
+        TOOL_CATEGORIES.some((c) => c.id === id)
+      );
+    }
+
+    // Fallback: If the model tried to call tools (either route_to_tools with invalid/empty args,
+    // or hallucinatorily called a direct tool in phase 1) but no valid categories were matched,
+    // we assume it needs tools and provide ALL categories in Phase 2 to ensure tools aren't missed.
+    if (selectedCategories.length === 0 && triageResult.toolCalls.length > 0) {
+      trace.push('phase: triage_fallback_all_categories');
+      selectedCategories = getCategoryIds();
+    }
+
+    if (selectedCategories.length === 0 && triageResult.content) {
       trace.push('phase: triage_direct_answer');
-      const reply = triageResult.content || 'Keine Antwort vom Modell.';
+      const reply = triageResult.content;
       const newMessages: LlmMessage[] = [
         { role: 'user', content: trimmed },
         { role: 'assistant', content: reply },
@@ -132,25 +149,12 @@ export class Assistant {
       chatHistory.append(chatId, newMessages);
       return { reply, trace };
     }
-
-    // Extract selected categories
-    const args = routeCall.function.arguments as { categories?: string[] };
-    const selectedCategories = (args.categories ?? []).filter((id) =>
-      TOOL_CATEGORIES.some((c) => c.id === id)
-    );
 
     if (selectedCategories.length === 0) {
-      trace.push('phase: triage_empty_categories');
-      const reply = triageResult.content || 'Keine Antwort vom Modell.';
-      const newMessages: LlmMessage[] = [
-        { role: 'user', content: trimmed },
-        { role: 'assistant', content: reply },
-      ];
-      chatHistory.append(chatId, newMessages);
-      return { reply, trace };
+      trace.push('phase: triage_empty_fallback_to_phase2');
+    } else {
+      trace.push(`phase: routed → [${selectedCategories.join(', ')}]`);
     }
-
-    trace.push(`phase: routed → [${selectedCategories.join(', ')}]`);
 
     // --- Phase 2: Execute with filtered tools ---
     const allowedToolNames = getToolsForCategories(selectedCategories);
@@ -260,29 +264,41 @@ export class Assistant {
   }
 
   private handleModelCommand(input: string, trace: string[]): AssistantResponse {
-    const arg = input.replace(/^\/model\s*/i, '').trim().toLowerCase();
+    const rawArgs = input.replace(/^\/model\s*/i, '').trim();
+    const args = rawArgs.split(/\s+/);
+    const providerArg = args[0]?.toLowerCase();
+    const modelArg = args[1]; // optional specific model name
 
-    if (!arg) {
+    if (!providerArg) {
       const current = llmService.modelLabel;
       const available = llmService.getAvailableProviders().join(', ');
       trace.push('action: model_info');
       return {
-        reply: `Aktuelles Modell: ${current}\nVerfügbar: ${available}\n\nWechsel mit /model ollama oder /model gemini`,
+        reply: `Aktuelles Modell: ${current}\nVerfügbar: ${available}\n\nWechsel mit z.B.:\n/model ollama\n/model ollama llama3.2:3b\n/model gemini gemini-2.5-flash`,
         trace,
       };
     }
 
     const available = llmService.getAvailableProviders();
-    if (!available.includes(arg as LlmProviderName)) {
-      trace.push(`action: model_switch_failed (${arg})`);
+    if (!available.includes(providerArg as LlmProviderName)) {
+      trace.push(`action: model_switch_failed (${providerArg})`);
       return {
-        reply: `Unbekannter Provider: "${arg}"\nVerfügbar: ${available.join(', ')}`,
+        reply: `Unbekannter Provider: "${providerArg}"\nVerfügbar: ${available.join(', ')}`,
         trace,
       };
     }
 
-    llmService.switchProvider(arg as LlmProviderName);
-    trace.push(`action: model_switched to ${arg}`);
+    if (modelArg) {
+      if (providerArg === 'ollama') {
+        config.ollamaModel = modelArg;
+      } else if (providerArg === 'gemini') {
+        config.geminiModel = modelArg;
+      }
+      trace.push(`action: specific_model_set (${modelArg})`);
+    }
+
+    llmService.switchProvider(providerArg as LlmProviderName);
+    trace.push(`action: model_switched to ${providerArg}`);
     return {
       reply: `Modell gewechselt zu: ${llmService.modelLabel}`,
       trace,
