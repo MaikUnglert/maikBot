@@ -60,7 +60,11 @@ function getBuiltInTools(): RegisteredTool[] {
 export class ToolRegistry {
   private builtInTools: RegisteredTool[] = getBuiltInTools();
 
-  async loadTools(): Promise<{
+  /**
+   * Loads all tools, optionally filtered to only the names in `allowedNames`.
+   * When `allowedNames` is provided, only tools whose name is in the set are returned.
+   */
+  async loadTools(allowedNames?: Set<string>): Promise<{
     definitions: ToolDefinition[];
     dispatch: Map<string, (args: Record<string, unknown>) => Promise<ToolExecResult>>;
   }> {
@@ -71,6 +75,7 @@ export class ToolRegistry {
       const mcpTools = await mcpHostService.listTools();
       for (const tool of mcpTools) {
         const name = tool.name;
+        if (allowedNames && !allowedNames.has(name)) continue;
 
         definitions.push({
           type: 'function',
@@ -93,12 +98,13 @@ export class ToolRegistry {
 
     for (const tool of this.builtInTools) {
       const name = tool.definition.function.name;
+      if (allowedNames && !allowedNames.has(name)) continue;
       definitions.push(tool.definition);
       dispatch.set(name, tool.execute);
     }
 
     logger.info(
-      { mcpTools: definitions.length - this.builtInTools.length, builtInTools: this.builtInTools.length },
+      { total: definitions.length, filtered: !!allowedNames },
       'Tool registry loaded'
     );
 

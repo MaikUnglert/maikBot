@@ -56,8 +56,9 @@ const allowedUserIds = env.ALLOWED_TELEGRAM_USER_IDS
 
 export interface McpServerConfig {
   name: string;
-  baseUrl: string;
-  apiKey: string;
+  url?: string;
+  baseUrl?: string;
+  apiKey?: string;
 }
 
 export interface McpToolPolicy {
@@ -85,16 +86,13 @@ function parseMcpServers(): McpServerConfig[] {
         }
         const record = item as Record<string, unknown>;
         const name = String(record.name ?? '').trim();
-        const baseUrl = String(record.baseUrl ?? '').trim();
-        const apiKey = String(record.apiKey ?? '').trim();
-        if (!name || !baseUrl || !apiKey) {
-          throw new Error(`MCP server entry at index ${index} requires name, baseUrl, apiKey`);
+        const url = record.url ? String(record.url).trim().replace(/\/$/, '') : undefined;
+        const baseUrl = record.baseUrl ? String(record.baseUrl).trim().replace(/\/$/, '') : undefined;
+        const apiKey = record.apiKey ? String(record.apiKey).trim() : undefined;
+        if (!name || (!url && !baseUrl)) {
+          throw new Error(`MCP server entry at index ${index} requires name and either url or baseUrl`);
         }
-        return {
-          name,
-          baseUrl: baseUrl.replace(/\/$/, ''),
-          apiKey,
-        };
+        return { name, url, baseUrl, apiKey };
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
