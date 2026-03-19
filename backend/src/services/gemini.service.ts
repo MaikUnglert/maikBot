@@ -74,6 +74,27 @@ function toGeminiContents(messages: LlmMessage[]): {
   return { systemInstruction, contents };
 }
 
+const UNSUPPORTED_SCHEMA_KEYS = new Set([
+  'additionalProperties',
+  '$schema',
+  'default',
+  'title',
+]);
+
+function sanitizeSchema(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(sanitizeSchema);
+  if (obj && typeof obj === 'object') {
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(obj as Record<string, unknown>)) {
+      if (!UNSUPPORTED_SCHEMA_KEYS.has(key)) {
+        cleaned[key] = sanitizeSchema(val);
+      }
+    }
+    return cleaned;
+  }
+  return obj;
+}
+
 function toGeminiFunctionDeclarations(tools: ToolDefinition[]) {
   if (tools.length === 0) return undefined;
 
@@ -82,7 +103,7 @@ function toGeminiFunctionDeclarations(tools: ToolDefinition[]) {
       function_declarations: tools.map((t) => ({
         name: t.function.name,
         description: t.function.description,
-        parameters: t.function.parameters,
+        parameters: sanitizeSchema(t.function.parameters),
       })),
     },
   ];

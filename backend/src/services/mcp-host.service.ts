@@ -74,11 +74,11 @@ export class McpHostService {
     return this.getServers().length > 0;
   }
 
-  private getMcpEndpoint(baseUrl: string): string {
-    if (baseUrl.endsWith('/api/mcp')) {
-      return baseUrl;
-    }
-    return `${baseUrl}/api/mcp`;
+  private getMcpEndpoint(server: McpServerConfig): string {
+    if (server.url) return server.url;
+    const base = server.baseUrl ?? '';
+    if (base.endsWith('/api/mcp')) return base;
+    return `${base}/api/mcp`;
   }
 
   private async callJsonRpc<T>(
@@ -86,25 +86,25 @@ export class McpHostService {
     method: string,
     params: Record<string, unknown>
   ): Promise<T> {
-    const endpoint = this.getMcpEndpoint(server.baseUrl);
+    const endpoint = this.getMcpEndpoint(server);
     const id = this.requestId++;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.mcpTimeoutMs);
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+    };
+    if (server.apiKey) {
+      headers.Authorization = `Bearer ${server.apiKey}`;
+    }
+
     let response: Response;
     try {
       response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/event-stream',
-          Authorization: `Bearer ${server.apiKey}`,
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id,
-          method,
-          params,
-        }),
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
         signal: controller.signal,
       });
     } catch (error) {
@@ -121,7 +121,15 @@ export class McpHostService {
       throw new Error(`HTTP ${response.status}: ${body}`);
     }
 
-    const data = (await response.json()) as JsonRpcResponse<T>;
+    const contentType = response.headers.get('content-type') ?? '';
+    let data: JsonRpcResponse<T>;
+
+    if (contentType.includes('text/event-stream')) {
+      data = await this.parseSseResponse<T>(response);
+    } else {
+      data = (await response.json()) as JsonRpcResponse<T>;
+    }
+
     if (data.error) {
       throw new Error(`${data.error.code}: ${data.error.message}`);
     }
@@ -130,6 +138,20 @@ export class McpHostService {
     }
 
     return data.result;
+  }
+
+  private async parseSseResponse<T>(response: Response): Promise<JsonRpcResponse<T>> {
+    const text = await response.text();
+    const lines = text.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const json = line.slice(6).trim();
+        if (json) {
+          return JSON.parse(json) as JsonRpcResponse<T>;
+        }
+      }
+    }
+    throw new Error('No valid data event in SSE response');
   }
 
   async listTools(forceRefresh = false): Promise<ServerToolInfo[]> {

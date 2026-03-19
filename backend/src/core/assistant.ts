@@ -4,16 +4,63 @@ import { toolRegistry } from './tool-registry.js';
 import { chatHistory } from './chat-history.js';
 import { config, type LlmProviderName } from '../config.js';
 import { logger } from '../logger.js';
+import {
+  TOOL_CATEGORIES,
+  getCategoryIds,
+  getToolsForCategories,
+  buildCategoryListForPrompt,
+} from './tool-categories.js';
 import type { LlmMessage, ToolDefinition } from '../services/llm.types.js';
+
+const MAX_TOOL_OUTPUT_CHARS = 8000;
+
+function truncateToolOutput(output: string): string {
+  if (output.length <= MAX_TOOL_OUTPUT_CHARS) return output;
+  return output.slice(0, MAX_TOOL_OUTPUT_CHARS) + '\n...(truncated, result too large)';
+}
 
 const SYSTEM_PROMPT = `You are MaikBot, a local AI assistant running on a home server.
 Rules:
 1) Respond briefly and clearly in German unless the user asks for another language.
 2) You have access to tools (smart home, shell, etc.). Use them when the user's request requires it.
 3) Do not invent tool results or device states. Only report what tools return.
-4) If a tool call fails with a name/match error, call GetLiveContext first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
+4) If a tool call fails with a name/match error, call ha_search_entities or ha_deep_search first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
 5) For shell commands, prefer concise output (e.g. use flags like -h, --no-pager, head/tail).
 6) On errors, provide concrete next steps.`;
+
+const TRIAGE_SYSTEM_PROMPT = `You are MaikBot, an AI assistant with smart-home and shell tools.
+Your job right now: decide if the user's message needs tools, and if so, which category.
+
+Available tool categories:
+${buildCategoryListForPrompt()}
+
+If the user's request requires tools, call the route_to_tools function with the relevant category IDs.
+If you can answer directly without any tools (e.g. general knowledge, math, conversation), just reply with text.
+IMPORTANT: When in doubt, route to tools. It is better to route unnecessarily than to miss a tool call.
+Respond in German unless asked otherwise.`;
+
+const ROUTE_TOOL_DEFINITION: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'route_to_tools',
+    description:
+      'Select which tool categories are needed to handle the user request. Call this when the user needs smart-home control, system commands, or any action that requires tools.',
+    parameters: {
+      type: 'object',
+      required: ['categories'],
+      properties: {
+        categories: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: getCategoryIds(),
+          },
+          description: 'One or more tool category IDs needed for this request',
+        },
+      },
+    },
+  },
+};
 
 export interface AssistantResponse {
   reply: string;
@@ -29,19 +76,16 @@ export class Assistant {
       return { reply: 'Bitte sende eine Nachricht.', trace };
     }
 
-    // /model — switch or show LLM provider
     if (trimmed.startsWith('/model')) {
       return this.handleModelCommand(trimmed, trace);
     }
 
-    // /clear — reset chat history
     if (trimmed === '/clear') {
       chatHistory.clear(chatId);
       trace.push('action: history_cleared');
       return { reply: 'Chat-Verlauf gelöscht.', trace };
     }
 
-    // /status — show chat stats
     if (trimmed === '/status') {
       const stats = chatHistory.getStats(chatId);
       trace.push('action: status');
@@ -51,7 +95,6 @@ export class Assistant {
       };
     }
 
-    // /mcp tools — debug command
     if (trimmed.startsWith('/mcp ')) {
       const instruction = trimmed.replace(/^\/mcp\s+/i, '').trim();
       if (instruction === 'tools' || instruction === 'help') {
@@ -61,26 +104,78 @@ export class Assistant {
       }
     }
 
-    // Load all tools (MCP + built-in)
-    const { definitions, dispatch } = await toolRegistry.loadTools();
     trace.push(`provider: ${llmService.modelLabel}`);
-    trace.push(`tools_loaded: ${definitions.length}`);
 
-    // Build messages: system + history + current user message
     const history = chatHistory.getHistory(chatId);
     trace.push(`history_messages: ${history.length}`);
 
-    const messages: LlmMessage[] = [
+    // --- Phase 1: Triage ---
+    const triageMessages: LlmMessage[] = [
+      { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
+      ...history,
+      { role: 'user', content: trimmed },
+    ];
+
+    const triageResult = await llmService.chat(triageMessages, [ROUTE_TOOL_DEFINITION]);
+
+    const routeCall = triageResult.toolCalls.find(
+      (tc) => tc.function.name === 'route_to_tools'
+    );
+
+    if (!routeCall) {
+      trace.push('phase: triage_direct_answer');
+      const reply = triageResult.content || 'Keine Antwort vom Modell.';
+      const newMessages: LlmMessage[] = [
+        { role: 'user', content: trimmed },
+        { role: 'assistant', content: reply },
+      ];
+      chatHistory.append(chatId, newMessages);
+      return { reply, trace };
+    }
+
+    // Extract selected categories
+    const args = routeCall.function.arguments as { categories?: string[] };
+    const selectedCategories = (args.categories ?? []).filter((id) =>
+      TOOL_CATEGORIES.some((c) => c.id === id)
+    );
+
+    if (selectedCategories.length === 0) {
+      trace.push('phase: triage_empty_categories');
+      const reply = triageResult.content || 'Keine Antwort vom Modell.';
+      const newMessages: LlmMessage[] = [
+        { role: 'user', content: trimmed },
+        { role: 'assistant', content: reply },
+      ];
+      chatHistory.append(chatId, newMessages);
+      return { reply, trace };
+    }
+
+    trace.push(`phase: routed → [${selectedCategories.join(', ')}]`);
+
+    // --- Phase 2: Execute with filtered tools ---
+    const allowedToolNames = getToolsForCategories(selectedCategories);
+    // Always include search tools so the model can look up entity names on errors
+    for (const name of ['ha_search_entities', 'ha_deep_search']) {
+      allowedToolNames.add(name);
+    }
+
+    const { definitions, dispatch } = await toolRegistry.loadTools(allowedToolNames);
+    trace.push(`tools_loaded: ${definitions.length}`);
+
+    const execMessages: LlmMessage[] = [
       { role: 'system', content: SYSTEM_PROMPT },
       ...history,
       { role: 'user', content: trimmed },
     ];
 
-    // Run tool-calling loop
     const newMessages: LlmMessage[] = [{ role: 'user', content: trimmed }];
-    const { reply, turnMessages } = await this.runToolLoop(messages, definitions, dispatch, trace);
+    const { reply, turnMessages } = await this.runToolLoop(
+      execMessages,
+      definitions,
+      dispatch,
+      trace
+    );
 
-    // Save this turn to history (user message + all tool interactions + final assistant reply)
     newMessages.push(...turnMessages);
     chatHistory.append(chatId, newMessages);
 
@@ -144,7 +239,11 @@ export class Assistant {
           }
         }
 
-        const toolMsg: LlmMessage = { role: 'tool', content: output, toolName };
+        const toolMsg: LlmMessage = {
+          role: 'tool',
+          content: truncateToolOutput(output),
+          toolName,
+        };
         messages.push(toolMsg);
         turnMessages.push(toolMsg);
       }
