@@ -10,6 +10,18 @@ import type { LlmProvider, LlmMessage, ToolDefinition, ToolCall, ChatResult } fr
 
 const NVIDIA_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Parse Retry-After as delay in seconds (integer only; ignores HTTP-date). */
+function parseRetryAfterSeconds(header: string | null): number | undefined {
+    if (!header) return undefined;
+    const n = Number.parseInt(header.trim(), 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+    return undefined;
+}
+
 // ---- OpenAI-compatible response types ----------------------------------------
 
 interface OpenAIToolCall {
@@ -148,53 +160,79 @@ export class NvidiaService implements LlmProvider {
             body.tool_choice = 'auto';
         }
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), config.nvidiaTimeoutMs);
+        const max429Retries = config.nvidia429MaxRetries;
+        const backoffBase = config.nvidia429BackoffMs;
+        const startedAt = Date.now();
 
-        try {
-            const startedAt = Date.now();
-            logger.info(
-                { model: config.nvidiaModel, toolCount: tools.length, msgCount: messages.length },
-                'Sending request to NVIDIA NIM'
-            );
+        logger.info(
+            { model: config.nvidiaModel, toolCount: tools.length, msgCount: messages.length },
+            'Sending request to NVIDIA NIM'
+        );
 
-            const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
-                method: 'POST',
-                headers: {
-                    Authorization: `Bearer ${apiKey}`,
-                    'Content-Type': 'application/json',
-                    Accept: 'application/json',
-                },
-                body: JSON.stringify(body),
-                signal: controller.signal,
-            });
+        for (let attempt = 0; attempt <= max429Retries; attempt++) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), config.nvidiaTimeoutMs);
 
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(`NVIDIA HTTP ${response.status}: ${text}`);
+            try {
+                const response = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json',
+                        Accept: 'application/json',
+                    },
+                    body: JSON.stringify(body),
+                    signal: controller.signal,
+                });
+
+                if (response.status === 429 && attempt < max429Retries) {
+                    await response.text();
+                    const retryAfterSec = parseRetryAfterSeconds(response.headers.get('Retry-After'));
+                    const delayMs = Math.min(
+                        120_000,
+                        retryAfterSec != null ? retryAfterSec * 1000 : backoffBase * 2 ** attempt
+                    );
+                    logger.warn(
+                        { attempt: attempt + 1, max429Retries, delayMs, retryAfterSec },
+                        'NVIDIA NIM rate limited (429), waiting before retry'
+                    );
+                    await sleep(delayMs);
+                    continue;
+                }
+
+                if (!response.ok) {
+                    const text = await response.text();
+                    const attemptsNote =
+                        response.status === 429 && max429Retries > 0
+                            ? ` (after ${max429Retries + 1} attempts with backoff)`
+                            : '';
+                    throw new Error(`NVIDIA HTTP ${response.status}: ${text}${attemptsNote}`);
+                }
+
+                const data = (await response.json()) as OpenAIResponse;
+                const result = parseOpenAIResponse(data);
+
+                logger.info(
+                    {
+                        durationMs: Date.now() - startedAt,
+                        contentLen: result.content.length,
+                        toolCallCount: result.toolCalls.length,
+                    },
+                    'NVIDIA NIM response received'
+                );
+
+                return result;
+            } catch (error) {
+                if (error instanceof Error && error.name === 'AbortError') {
+                    throw new Error(`NVIDIA request timed out after ${config.nvidiaTimeoutMs}ms`);
+                }
+                throw error;
+            } finally {
+                clearTimeout(timeout);
             }
-
-            const data = (await response.json()) as OpenAIResponse;
-            const result = parseOpenAIResponse(data);
-
-            logger.info(
-                {
-                    durationMs: Date.now() - startedAt,
-                    contentLen: result.content.length,
-                    toolCallCount: result.toolCalls.length,
-                },
-                'NVIDIA NIM response received'
-            );
-
-            return result;
-        } catch (error) {
-            if (error instanceof Error && error.name === 'AbortError') {
-                throw new Error(`NVIDIA request timed out after ${config.nvidiaTimeoutMs}ms`);
-            }
-            throw error;
-        } finally {
-            clearTimeout(timeout);
         }
+
+        throw new Error('NVIDIA NIM: retry loop exited unexpectedly');
     }
 
     async healthCheck(): Promise<boolean> {

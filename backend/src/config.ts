@@ -28,6 +28,9 @@ const envSchema = z.object({
   NVIDIA_MODEL: z.string().min(1).default('moonshotai/kimi-k2.5'),
   NVIDIA_MAX_TOKENS: z.coerce.number().int().positive().default(16384),
   NVIDIA_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
+  /** Extra attempts after HTTP 429 (each waits with exponential backoff). */
+  NVIDIA_429_MAX_RETRIES: z.coerce.number().int().min(0).max(10).default(3),
+  NVIDIA_429_BACKOFF_MS: z.coerce.number().int().positive().default(2500),
 
   MCP_SERVERS_JSON: z.string().optional(),
   MCP_TOOL_POLICY_JSON: z.string().optional(),
@@ -164,6 +167,8 @@ export const config = {
   nvidiaModel: env.NVIDIA_MODEL,
   nvidiaMaxTokens: env.NVIDIA_MAX_TOKENS,
   nvidiaTimeoutMs: env.NVIDIA_TIMEOUT_MS,
+  nvidia429MaxRetries: env.NVIDIA_429_MAX_RETRIES,
+  nvidia429BackoffMs: env.NVIDIA_429_BACKOFF_MS,
 
   haMcpBaseUrl: env.HA_MCP_BASE_URL?.replace(/\/$/, ''),
   haMcpApiKey: env.HA_MCP_API_KEY,
