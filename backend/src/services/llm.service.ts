@@ -2,11 +2,13 @@ import { config, type LlmProviderName } from '../config.js';
 import { logger } from '../logger.js';
 import { ollamaService } from './ollama.service.js';
 import { geminiService } from './gemini.service.js';
+import { nvidiaService } from './nvidia.service.js';
 import type { LlmProvider, LlmMessage, ToolDefinition, ChatResult } from './llm.types.js';
 
 const providers: Record<LlmProviderName, LlmProvider> = {
   ollama: ollamaService,
   gemini: geminiService,
+  nvidia: nvidiaService,
 };
 
 class LlmService implements LlmProvider {
@@ -18,6 +20,7 @@ class LlmService implements LlmProvider {
 
   get modelLabel(): string {
     if (this.activeProvider === 'gemini') return `gemini (${config.geminiModel})`;
+    if (this.activeProvider === 'nvidia') return `nvidia (${config.nvidiaModel})`;
     return `ollama (${config.ollamaModel})`;
   }
 

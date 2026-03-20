@@ -6,7 +6,7 @@ const booleanString = z
   .transform((val) => val.toLowerCase() === 'true' || val === '1')
   .pipe(z.boolean());
 
-const llmProviderEnum = z.enum(['ollama', 'gemini']).default('ollama');
+const llmProviderEnum = z.enum(['ollama', 'gemini', 'nvidia']).default('ollama');
 
 const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
@@ -23,6 +23,11 @@ const envSchema = z.object({
   GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
   GEMINI_FALLBACK_MODEL: z.string().optional(),
   GEMINI_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+
+  NVIDIA_API_KEY: z.string().optional(),
+  NVIDIA_MODEL: z.string().min(1).default('moonshotai/kimi-k2.5'),
+  NVIDIA_MAX_TOKENS: z.coerce.number().int().positive().default(16384),
+  NVIDIA_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
 
   MCP_SERVERS_JSON: z.string().optional(),
   MCP_TOOL_POLICY_JSON: z.string().optional(),
@@ -137,7 +142,7 @@ function parseMcpToolPolicy(): McpToolPolicyConfig {
 
 const mcpToolPolicy = parseMcpToolPolicy();
 
-export type LlmProviderName = 'ollama' | 'gemini';
+export type LlmProviderName = 'ollama' | 'gemini' | 'nvidia';
 
 export const config = {
   telegramBotToken: env.TELEGRAM_BOT_TOKEN,
@@ -154,6 +159,11 @@ export const config = {
   geminiModel: env.GEMINI_MODEL,
   geminiFallbackModel: env.GEMINI_FALLBACK_MODEL,
   geminiTimeoutMs: env.GEMINI_TIMEOUT_MS,
+
+  nvidiaApiKey: env.NVIDIA_API_KEY,
+  nvidiaModel: env.NVIDIA_MODEL,
+  nvidiaMaxTokens: env.NVIDIA_MAX_TOKENS,
+  nvidiaTimeoutMs: env.NVIDIA_TIMEOUT_MS,
 
   haMcpBaseUrl: env.HA_MCP_BASE_URL?.replace(/\/$/, ''),
   haMcpApiKey: env.HA_MCP_API_KEY,

@@ -308,7 +308,7 @@ export class Assistant {
       const available = llmService.getAvailableProviders().join(', ');
       trace.push('action: model_info');
       return {
-        reply: `Current model: ${current}\nAvailable: ${available}\n\nExamples:\n/model ollama\n/model ollama llama3.2:3b\n/model gemini gemini-2.5-flash`,
+        reply: `Current model: ${current}\nAvailable: ${available}\n\nExamples:\n/model ollama\n/model ollama llama3.2:3b\n/model gemini gemini-2.5-flash\n/model nvidia\n/model nvidia moonshotai/kimi-k2.5`,
         trace,
       };
     }
@@ -327,6 +327,8 @@ export class Assistant {
         config.ollamaModel = modelArg;
       } else if (providerArg === 'gemini') {
         config.geminiModel = modelArg;
+      } else if (providerArg === 'nvidia') {
+        config.nvidiaModel = modelArg;
       }
       trace.push(`action: specific_model_set (${modelArg})`);
     }
