@@ -38,6 +38,11 @@ const envSchema = z.object({
   LLM_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(10),
   SHELL_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   TELEGRAM_SHOW_AGENT_TRACE: booleanString.default('false'),
+  /** Skip triage LLM call; load all tool categories in one phase (fewer API calls, larger tool schema). */
+  LLM_SKIP_TRIAGE: booleanString.default('false'),
+  /** Heuristic: short on/off-style commands skip triage and use search+control only (saves 1 call + smaller schema). */
+  LLM_HA_FAST_PATH: booleanString.default('true'),
+
   HA_MCP_BASE_URL: z.string().url().optional(),
   HA_MCP_API_KEY: z.string().optional(),
   LOG_LEVEL: z
@@ -178,5 +183,7 @@ export const config = {
   llmMaxToolCalls: env.LLM_MAX_TOOL_CALLS,
   shellTimeoutMs: env.SHELL_TIMEOUT_MS,
   telegramShowAgentTrace: env.TELEGRAM_SHOW_AGENT_TRACE,
+  llmSkipTriage: env.LLM_SKIP_TRIAGE,
+  llmHaFastPath: env.LLM_HA_FAST_PATH,
   logLevel: env.LOG_LEVEL,
 };

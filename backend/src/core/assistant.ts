@@ -22,6 +22,27 @@ function truncateToolOutput(output: string): string {
   return output.slice(0, MAX_TOOL_OUTPUT_CHARS) + '\n...(truncated, result too large)';
 }
 
+/**
+ * Detect typical Home Assistant on/off / toggle phrasing (DE/EN) to skip the triage LLM call.
+ * Conservative: long lines and slash-commands never match.
+ */
+function tryHaFastPathCategories(text: string): string[] | null {
+  if (!config.llmHaFastPath) return null;
+  const t = text.trim();
+  if (t.length > 200 || t.startsWith('/')) return null;
+
+  const german =
+    /\b(mach|mache|schalt|schalte|stell|stelle|dimme?)\s+[^\n!?]{1,55}\s+(an|aus|ein)\b/i.test(t);
+  const english =
+    /\b(turn|switch|set|dim)\s+[^\n!?]{1,55}\s+(on|off)\b/i.test(t);
+  const toggleEn = /\btoggle\s+[^\n!?]{2,55}\b/i.test(t);
+
+  if (german || english || toggleEn) {
+    return ['search', 'control'];
+  }
+  return null;
+}
+
 const SYSTEM_PROMPT = `You are MaikBot, a local AI assistant running on a home server.
 Rules:
 1) Respond briefly and clearly in English unless the user explicitly asks for another language.
@@ -189,59 +210,69 @@ export class Assistant {
     trace.push(`history_messages: ${history.length}`);
 
     try {
-      // --- Phase 1: Triage ---
-      const triageMessages: LlmMessage[] = [
-        { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
-        ...history,
-        { role: 'user', content: trimmed },
-      ];
-
-      const triageResult = await llmService.chat(triageMessages, [ROUTE_TOOL_DEFINITION]);
-
-      const routeCall = triageResult.toolCalls.find(
-        (tc) => tc.function.name === 'route_to_tools'
-      );
-
       let selectedCategories: string[] = [];
 
-      if (routeCall) {
-        const args = routeCall.function.arguments as { categories?: unknown };
-        let cats: string[] = [];
-        if (Array.isArray(args.categories)) {
-          cats = args.categories as string[];
-        } else if (typeof args.categories === 'string') {
-          cats = [args.categories];
-        }
-        selectedCategories = cats.filter((id) =>
-          TOOL_CATEGORIES.some((c) => c.id === id)
-        );
-      }
-
-      const isExplicitlyEmpty =
-        routeCall &&
-        Array.isArray((routeCall.function.arguments as { categories?: unknown }).categories) &&
-        ((routeCall.function.arguments as { categories: unknown[] }).categories.length === 0);
-
-      if (selectedCategories.length === 0 && triageResult.toolCalls.length > 0 && !isExplicitlyEmpty) {
-        trace.push('phase: triage_fallback_all_categories');
-        selectedCategories = getCategoryIds();
-      }
-
-      if (selectedCategories.length === 0 && triageResult.content) {
-        trace.push('phase: triage_direct_answer');
-        const reply = triageResult.content;
-        const newMessages: LlmMessage[] = [
-          { role: 'user', content: trimmed },
-          { role: 'assistant', content: reply },
-        ];
-        chatHistory.append(chatId, newMessages);
-        return { reply, trace };
-      }
-
-      if (selectedCategories.length === 0) {
-        trace.push('phase: triage_empty_fallback_to_phase2');
+      if (config.llmSkipTriage) {
+        trace.push('phase: skip_triage_all_categories');
+        selectedCategories = [...getCategoryIds()];
       } else {
-        trace.push(`phase: routed → [${selectedCategories.join(', ')}]`);
+        const fastCats = tryHaFastPathCategories(trimmed);
+        if (fastCats) {
+          trace.push(`phase: ha_fast_path → [${fastCats.join(', ')}]`);
+          selectedCategories = fastCats;
+        } else {
+          const triageMessages: LlmMessage[] = [
+            { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
+            ...history,
+            { role: 'user', content: trimmed },
+          ];
+
+          const triageResult = await llmService.chat(triageMessages, [ROUTE_TOOL_DEFINITION]);
+
+          const routeCall = triageResult.toolCalls.find(
+            (tc) => tc.function.name === 'route_to_tools'
+          );
+
+          if (routeCall) {
+            const args = routeCall.function.arguments as { categories?: unknown };
+            let cats: string[] = [];
+            if (Array.isArray(args.categories)) {
+              cats = args.categories as string[];
+            } else if (typeof args.categories === 'string') {
+              cats = [args.categories];
+            }
+            selectedCategories = cats.filter((id) =>
+              TOOL_CATEGORIES.some((c) => c.id === id)
+            );
+          }
+
+          const isExplicitlyEmpty =
+            routeCall &&
+            Array.isArray((routeCall.function.arguments as { categories?: unknown }).categories) &&
+            ((routeCall.function.arguments as { categories: unknown[] }).categories.length === 0);
+
+          if (selectedCategories.length === 0 && triageResult.toolCalls.length > 0 && !isExplicitlyEmpty) {
+            trace.push('phase: triage_fallback_all_categories');
+            selectedCategories = getCategoryIds();
+          }
+
+          if (selectedCategories.length === 0 && triageResult.content) {
+            trace.push('phase: triage_direct_answer');
+            const reply = triageResult.content;
+            const newMessages: LlmMessage[] = [
+              { role: 'user', content: trimmed },
+              { role: 'assistant', content: reply },
+            ];
+            chatHistory.append(chatId, newMessages);
+            return { reply, trace };
+          }
+
+          if (selectedCategories.length === 0) {
+            trace.push('phase: triage_empty_fallback_to_phase2');
+          } else {
+            trace.push(`phase: routed → [${selectedCategories.join(', ')}]`);
+          }
+        }
       }
 
       // --- Phase 2: Execute with filtered tools ---
