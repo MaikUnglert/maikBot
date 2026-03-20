@@ -3,9 +3,13 @@ export interface LlmMessage {
   content: string;
   toolCalls?: ToolCall[];
   toolName?: string;
+  /** OpenAI-style tool round-trip (required when multiple tools run in one turn) */
+  toolCallId?: string;
 }
 
 export interface ToolCall {
+  /** Provider-assigned id (OpenAI/NVIDIA); synthesized when missing */
+  id?: string;
   function: {
     name: string;
     arguments: Record<string, unknown>;

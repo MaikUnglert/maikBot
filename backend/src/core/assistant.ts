@@ -21,7 +21,7 @@ function truncateToolOutput(output: string): string {
 
 const SYSTEM_PROMPT = `You are MaikBot, a local AI assistant running on a home server.
 Rules:
-1) Respond briefly and clearly in German unless the user asks for another language.
+1) Respond briefly and clearly in English unless the user explicitly asks for another language.
 2) You have access to tools (smart home, shell, etc.). Use them when the user's request requires it.
 3) Do not invent tool results or device states. Only report what tools return.
 4) If a tool call fails with a name/match error, call ha_search_entities or ha_deep_search first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
@@ -37,7 +37,7 @@ ${buildCategoryListForPrompt()}
 If the user's request requires tools, call the route_to_tools function with the relevant category IDs.
 If you can answer directly without any tools (e.g. general knowledge, math, conversation), just reply with text.
 IMPORTANT: When in doubt, route to tools. It is better to route unnecessarily than to miss a tool call.
-Respond in German unless asked otherwise.`;
+Respond in English unless the user explicitly asks for another language.`;
 
 const ROUTE_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
@@ -73,7 +73,7 @@ export class Assistant {
     const trace: string[] = [];
 
     if (!trimmed) {
-      return { reply: 'Bitte sende eine Nachricht.', trace };
+      return { reply: 'Please send a message.', trace };
     }
 
     if (trimmed.startsWith('/model')) {
@@ -83,14 +83,14 @@ export class Assistant {
     if (trimmed === '/clear') {
       chatHistory.clear(chatId);
       trace.push('action: history_cleared');
-      return { reply: 'Chat-Verlauf gelöscht.', trace };
+      return { reply: 'Chat history cleared.', trace };
     }
 
     if (trimmed === '/status') {
       const stats = chatHistory.getStats(chatId);
       trace.push('action: status');
       return {
-        reply: `Modell: ${llmService.modelLabel}\nNachrichten im Kontext: ${stats.messageCount}\nGeschätzte Tokens: ${stats.estimatedTokens}`,
+        reply: `Model: ${llmService.modelLabel}\nMessages in context: ${stats.messageCount}\nEstimated tokens: ${stats.estimatedTokens}`,
         trace,
       };
     }
@@ -125,16 +125,25 @@ export class Assistant {
     let selectedCategories: string[] = [];
 
     if (routeCall) {
-      const args = routeCall.function.arguments as { categories?: string[] };
-      selectedCategories = (args.categories ?? []).filter((id) =>
+      const args = routeCall.function.arguments as { categories?: unknown };
+      let cats: string[] = [];
+      if (Array.isArray(args.categories)) {
+        cats = args.categories as string[];
+      } else if (typeof args.categories === 'string') {
+        cats = [args.categories]; // Handle hallucinated string instead of array
+      }
+      selectedCategories = cats.filter((id) =>
         TOOL_CATEGORIES.some((c) => c.id === id)
       );
     }
 
-    // Fallback: If the model tried to call tools (either route_to_tools with invalid/empty args,
-    // or hallucinatorily called a direct tool in phase 1) but no valid categories were matched,
-    // we assume it needs tools and provide ALL categories in Phase 2 to ensure tools aren't missed.
-    if (selectedCategories.length === 0 && triageResult.toolCalls.length > 0) {
+    // Fallback: If the model hallucinated a direct tool call instead of route_to_tools,
+    // or if it meant to choose categories but misformatted them, we default to all.
+    // However, if it explicitly returned an empty array [] for route_to_tools, 
+    // it means it recognized NO tools are needed! Do not fallback in that specific case.
+    const isExplicitlyEmpty = routeCall && Array.isArray((routeCall.function.arguments as any).categories) && (routeCall.function.arguments as any).categories.length === 0;
+
+    if (selectedCategories.length === 0 && triageResult.toolCalls.length > 0 && !isExplicitlyEmpty) {
       trace.push('phase: triage_fallback_all_categories');
       selectedCategories = getCategoryIds();
     }
@@ -201,20 +210,42 @@ export class Assistant {
 
       if (result.toolCalls.length === 0) {
         trace.push('execution_path: final');
-        const reply = result.content || 'Keine Antwort vom Modell.';
+        let reply = (result.content ?? '').trim();
+        if (!reply) {
+          trace.push('execution_path: empty_reply_retry');
+          const retryMessages: LlmMessage[] = [
+            ...messages,
+            {
+              role: 'user',
+              content:
+                'Your last turn had no assistant text. In English, reply in one or two short sentences: what you did or what failed, based only on the conversation and tool results above.',
+            },
+          ];
+          const retry = await llmService.chat(retryMessages, []);
+          reply = (retry.content ?? '').trim();
+        }
+        if (!reply) {
+          reply =
+            'No response from the model. Try again or rephrase; if it keeps happening, check backend logs and LLM connectivity.';
+        }
         turnMessages.push({ role: 'assistant', content: reply });
         return { reply, turnMessages };
       }
 
+      const toolCallsWithIds = result.toolCalls.map((tc, i) => ({
+        ...tc,
+        id: tc.id ?? `call_${i}`,
+      }));
+
       const assistantMsg: LlmMessage = {
         role: 'assistant',
         content: result.content,
-        toolCalls: result.toolCalls,
+        toolCalls: toolCallsWithIds,
       };
       messages.push(assistantMsg);
       turnMessages.push(assistantMsg);
 
-      for (const tc of result.toolCalls) {
+      for (const tc of toolCallsWithIds) {
         callCount++;
         const toolName = tc.function.name;
         const toolArgs = tc.function.arguments;
@@ -247,6 +278,7 @@ export class Assistant {
           role: 'tool',
           content: truncateToolOutput(output),
           toolName,
+          toolCallId: tc.id,
         };
         messages.push(toolMsg);
         turnMessages.push(toolMsg);
@@ -256,7 +288,9 @@ export class Assistant {
         trace.push(`max_tool_calls_reached: ${maxCalls}`);
         logger.warn({ callCount, maxCalls }, 'Max tool calls reached, forcing final response');
         const finalResult = await llmService.chat(messages, []);
-        const reply = finalResult.content || 'Tool-Call-Limit erreicht. Bitte versuche es erneut.';
+        const reply =
+          finalResult.content?.trim() ||
+          'Tool call limit reached. Please try again with a simpler request.';
         turnMessages.push({ role: 'assistant', content: reply });
         return { reply, turnMessages };
       }
@@ -274,7 +308,7 @@ export class Assistant {
       const available = llmService.getAvailableProviders().join(', ');
       trace.push('action: model_info');
       return {
-        reply: `Aktuelles Modell: ${current}\nVerfügbar: ${available}\n\nWechsel mit z.B.:\n/model ollama\n/model ollama llama3.2:3b\n/model gemini gemini-2.5-flash`,
+        reply: `Current model: ${current}\nAvailable: ${available}\n\nExamples:\n/model ollama\n/model ollama llama3.2:3b\n/model gemini gemini-2.5-flash`,
         trace,
       };
     }
@@ -283,7 +317,7 @@ export class Assistant {
     if (!available.includes(providerArg as LlmProviderName)) {
       trace.push(`action: model_switch_failed (${providerArg})`);
       return {
-        reply: `Unbekannter Provider: "${providerArg}"\nVerfügbar: ${available.join(', ')}`,
+        reply: `Unknown provider: "${providerArg}"\nAvailable: ${available.join(', ')}`,
         trace,
       };
     }
@@ -300,7 +334,7 @@ export class Assistant {
     llmService.switchProvider(providerArg as LlmProviderName);
     trace.push(`action: model_switched to ${providerArg}`);
     return {
-      reply: `Modell gewechselt zu: ${llmService.modelLabel}`,
+      reply: `Switched model to: ${llmService.modelLabel}`,
       trace,
     };
   }

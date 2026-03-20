@@ -3,6 +3,15 @@ import { assistant } from '../core/assistant.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
+/** Escape for Telegram HTML parse mode, then turn **bold** into <b>…</b>. */
+function formatReplyForTelegramHtml(text: string): string {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return escaped.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+}
+
 function isAllowedUser(userId: number | undefined): boolean {
   if (!userId) {
     return false;
@@ -67,12 +76,14 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
         ? `\n\n---\nAgent Trace:\n${response.trace.map((line) => `- ${line}`).join('\n')}`
         : '';
 
-    // Convert standard markdown **bold** to Telegram's *bold*
-    const formattedReply = response.reply.replace(/\*\*(.*?)\*\*/g, '*$1*');
+    const formattedReply = formatReplyForTelegramHtml(`${response.reply}${traceBlock}`).slice(
+      0,
+      4096
+    );
 
-    await safeSendMessage(bot, chatId, `${formattedReply}${traceBlock}`.slice(0, 4096), {
+    await safeSendMessage(bot, chatId, formattedReply, {
       reply_to_message_id: msg.message_id,
-      parse_mode: 'Markdown'
+      parse_mode: 'HTML',
     });
   } catch (error) {
     logger.error({ err: error }, 'Failed to process Telegram message');
@@ -96,11 +107,11 @@ export function startTelegramBot(): TelegramBot {
   });
 
   bot.setMyCommands([
-    { command: '/clear', description: 'Chat-Verlauf löschen' },
-    { command: '/model', description: 'KI-Modell wechseln (ollama/gemini)' },
-    { command: '/status', description: 'Aktuellen Status anzeigen' },
-    { command: '/mcp', description: 'Verfügbare MCP Tools auflisten (z.B. /mcp tools)' }
-  ]).catch(err => logger.error({ err }, 'Failed to set Telegram commands'));
+    { command: '/clear', description: 'Clear chat history' },
+    { command: '/model', description: 'Switch LLM provider (ollama/gemini/nvidia)' },
+    { command: '/status', description: 'Show session status' },
+    { command: '/mcp', description: 'List MCP tools (e.g. /mcp tools)' },
+  ]).catch((err) => logger.error({ err }, 'Failed to set Telegram commands'));
 
   bot.on('message', (msg) => {
     void handleMessage(bot, msg).catch((error) => {

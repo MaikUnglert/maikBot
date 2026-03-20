@@ -22,6 +22,7 @@ interface GeminiResponse {
       parts?: GeminiPart[];
     };
   }>;
+  promptFeedback?: { blockReason?: string };
   error?: { message: string; code: number };
 }
 
@@ -119,7 +120,16 @@ function parseGeminiResponse(data: GeminiResponse): ChatResult {
     throw new Error(`Gemini API error ${data.error.code}: ${data.error.message}`);
   }
 
-  const parts = data.candidates?.[0]?.content?.parts ?? [];
+  if (!data.candidates?.length) {
+    const block = data.promptFeedback?.blockReason ?? 'unknown';
+    logger.warn({ promptFeedback: data.promptFeedback }, 'Gemini returned no candidates');
+    return {
+      content: `The model did not return an answer (blocked or empty: ${block}). Try rephrasing.`,
+      toolCalls: [],
+    };
+  }
+
+  const parts = data.candidates[0]?.content?.parts ?? [];
   let content = '';
   const toolCalls: ToolCall[] = [];
 
