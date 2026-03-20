@@ -28,9 +28,9 @@ const envSchema = z.object({
   NVIDIA_MODEL: z.string().min(1).default('moonshotai/kimi-k2.5'),
   NVIDIA_MAX_TOKENS: z.coerce.number().int().positive().default(16384),
   NVIDIA_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
-  /** Extra attempts after HTTP 429 (each waits with exponential backoff). */
+  /** Extra attempts after HTTP 429 (fixed pause between each retry). */
   NVIDIA_429_MAX_RETRIES: z.coerce.number().int().min(0).max(10).default(3),
-  NVIDIA_429_BACKOFF_MS: z.coerce.number().int().positive().default(2500),
+  NVIDIA_429_BACKOFF_MS: z.coerce.number().int().positive().default(1000),
 
   MCP_SERVERS_JSON: z.string().optional(),
   MCP_TOOL_POLICY_JSON: z.string().optional(),

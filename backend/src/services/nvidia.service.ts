@@ -14,14 +14,6 @@ function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Parse Retry-After as delay in seconds (integer only; ignores HTTP-date). */
-function parseRetryAfterSeconds(header: string | null): number | undefined {
-    if (!header) return undefined;
-    const n = Number.parseInt(header.trim(), 10);
-    if (Number.isFinite(n) && n >= 0) return n;
-    return undefined;
-}
-
 // ---- OpenAI-compatible response types ----------------------------------------
 
 interface OpenAIToolCall {
@@ -161,7 +153,7 @@ export class NvidiaService implements LlmProvider {
         }
 
         const max429Retries = config.nvidia429MaxRetries;
-        const backoffBase = config.nvidia429BackoffMs;
+        const delayAfter429Ms = config.nvidia429BackoffMs;
         const startedAt = Date.now();
 
         logger.info(
@@ -187,16 +179,11 @@ export class NvidiaService implements LlmProvider {
 
                 if (response.status === 429 && attempt < max429Retries) {
                     await response.text();
-                    const retryAfterSec = parseRetryAfterSeconds(response.headers.get('Retry-After'));
-                    const delayMs = Math.min(
-                        120_000,
-                        retryAfterSec != null ? retryAfterSec * 1000 : backoffBase * 2 ** attempt
-                    );
                     logger.warn(
-                        { attempt: attempt + 1, max429Retries, delayMs, retryAfterSec },
+                        { attempt: attempt + 1, max429Retries, delayMs: delayAfter429Ms },
                         'NVIDIA NIM rate limited (429), waiting before retry'
                     );
-                    await sleep(delayMs);
+                    await sleep(delayAfter429Ms);
                     continue;
                 }
 
@@ -204,7 +191,7 @@ export class NvidiaService implements LlmProvider {
                     const text = await response.text();
                     const attemptsNote =
                         response.status === 429 && max429Retries > 0
-                            ? ` (after ${max429Retries + 1} attempts with backoff)`
+                            ? ` (after ${max429Retries + 1} attempts)`
                             : '';
                     throw new Error(`NVIDIA HTTP ${response.status}: ${text}${attemptsNote}`);
                 }
