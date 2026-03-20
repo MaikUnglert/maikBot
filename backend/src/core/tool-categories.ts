@@ -163,6 +163,13 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     description: 'Run shell commands on the bot server (system info, files, network)',
     tools: ['shell_exec'],
   },
+  {
+    id: 'memory',
+    label: 'Persistent memory',
+    description:
+      'Read/append/patch Markdown notes per domain (e.g. home_assistant: user nicknames → entity_id). Not loaded into context until memory_read is called.',
+    tools: ['memory_read', 'memory_append', 'memory_str_replace'],
+  },
 ];
 
 export function getCategoryIds(): string[] {

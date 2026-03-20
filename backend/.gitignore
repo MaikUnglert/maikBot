@@ -1,3 +1,7 @@
 node_modules/
 dist/
 .env
+
+# Per-chatbot learned notes (entity nicknames, etc.)
+data/memory/*
+!data/memory/.gitkeep

@@ -50,7 +50,9 @@ Rules:
 3) Do not invent tool results or device states. Only report what tools return.
 4) If a tool call fails with a name/match error, call ha_search_entities or ha_deep_search first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
 5) For shell commands, prefer concise output (e.g. use flags like -h, --no-pager, head/tail).
-6) On errors, provide concrete next steps.`;
+6) On errors, provide concrete next steps.
+7) Persistent memory is stored in per-domain Markdown files on disk (memory_* tools). It is NOT in your context until you call memory_read. For Home Assistant nicknames (e.g. user says "Schreibtisch" for a lamp), call memory_read(domain home_assistant) when resolving names; after you confirm the correct entity_id, save it with memory_append (new line) or memory_str_replace (edit existing text — copy old_string exactly from memory_read, one unique match).
+8) Do not claim you "remember" HA entity mappings unless they came from memory_read in this turn or from tool output in this conversation.`;
 
 const TRIAGE_SYSTEM_PROMPT = `You are MaikBot, an AI assistant with smart-home and shell tools.
 Your job right now: decide if the user's message needs tools, and if so, which category.
@@ -303,6 +305,16 @@ export class Assistant {
       const allowedToolNames = getToolsForCategories(selectedCategories);
       for (const name of ['ha_search_entities', 'ha_deep_search']) {
         allowedToolNames.add(name);
+      }
+
+      const toolNameList = [...allowedToolNames];
+      const attachMemoryTools =
+        toolNameList.some((n) => n.startsWith('ha_')) ||
+        toolNameList.some((n) => n.startsWith('memory_'));
+      if (attachMemoryTools) {
+        for (const name of ['memory_read', 'memory_append', 'memory_str_replace']) {
+          allowedToolNames.add(name);
+        }
       }
 
       const { definitions, dispatch } = await toolRegistry.loadTools(allowedToolNames);

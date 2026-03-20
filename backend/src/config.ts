@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import path from 'node:path';
 import { z } from 'zod';
 
 const booleanString = z
@@ -42,6 +43,9 @@ const envSchema = z.object({
   LLM_SKIP_TRIAGE: booleanString.default('false'),
   /** Heuristic: short on/off-style commands skip triage and use search+control only (saves 1 call + smaller schema). */
   LLM_HA_FAST_PATH: booleanString.default('true'),
+
+  /** Directory for domain memory files (*.md), e.g. entity nicknames. Default: <cwd>/data/memory */
+  MEMORY_DATA_DIR: z.string().optional(),
 
   HA_MCP_BASE_URL: z.string().url().optional(),
   HA_MCP_API_KEY: z.string().optional(),
@@ -150,6 +154,12 @@ function parseMcpToolPolicy(): McpToolPolicyConfig {
 
 const mcpToolPolicy = parseMcpToolPolicy();
 
+function resolveMemoryDataDir(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return path.resolve(process.cwd(), 'data', 'memory');
+}
+
 export type LlmProviderName = 'ollama' | 'gemini' | 'nvidia';
 
 export const config = {
@@ -185,5 +195,6 @@ export const config = {
   telegramShowAgentTrace: env.TELEGRAM_SHOW_AGENT_TRACE,
   llmSkipTriage: env.LLM_SKIP_TRIAGE,
   llmHaFastPath: env.LLM_HA_FAST_PATH,
+  memoryDataDir: resolveMemoryDataDir(env.MEMORY_DATA_DIR),
   logLevel: env.LOG_LEVEL,
 };

@@ -1,5 +1,6 @@
 import { mcpHostService } from '../services/mcp-host.service.js';
 import { executeShell } from './tools/shell.js';
+import { getMemoryTools } from './tools/memory-tools.js';
 import { logger } from '../logger.js';
 import type { ToolDefinition } from '../services/llm.types.js';
 
@@ -26,35 +27,40 @@ function normalizeInputSchema(schema: unknown): Record<string, unknown> {
 }
 
 function getBuiltInTools(): RegisteredTool[] {
-  return [
-    {
-      definition: {
-        type: 'function',
-        function: {
-          name: 'shell_exec',
-          description:
-            'Execute a shell command on the server and return stdout/stderr. Use for system info, file operations, network checks, package management, or any CLI task.',
-          parameters: {
-            type: 'object',
-            required: ['command'],
-            properties: {
-              command: {
-                type: 'string',
-                description: 'The bash command to execute',
-              },
+  const shell: RegisteredTool = {
+    definition: {
+      type: 'function',
+      function: {
+        name: 'shell_exec',
+        description:
+          'Execute a shell command on the server and return stdout/stderr. Use for system info, file operations, network checks, package management, or any CLI task.',
+        parameters: {
+          type: 'object',
+          required: ['command'],
+          properties: {
+            command: {
+              type: 'string',
+              description: 'The bash command to execute',
             },
           },
         },
       },
-      execute: async (args) => {
-        const command = typeof args.command === 'string' ? args.command : String(args.command ?? '');
-        if (!command.trim()) {
-          return { ok: false, output: 'No command provided.' };
-        }
-        return executeShell(command);
-      },
     },
-  ];
+    execute: async (args) => {
+      const command = typeof args.command === 'string' ? args.command : String(args.command ?? '');
+      if (!command.trim()) {
+        return { ok: false, output: 'No command provided.' };
+      }
+      return executeShell(command);
+    },
+  };
+
+  const memory = getMemoryTools().map((t) => ({
+    definition: t.definition,
+    execute: t.execute,
+  }));
+
+  return [shell, ...memory];
 }
 
 export class ToolRegistry {
