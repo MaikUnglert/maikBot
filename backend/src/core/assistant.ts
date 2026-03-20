@@ -14,6 +14,9 @@ import type { LlmMessage, ToolDefinition } from '../services/llm.types.js';
 
 const MAX_TOOL_OUTPUT_CHARS = 8000;
 
+const TRY_AGAIN_HINT =
+  'You can try again in a moment, send the same message again, or rephrase your request.';
+
 function truncateToolOutput(output: string): string {
   if (output.length <= MAX_TOOL_OUTPUT_CHARS) return output;
   return output.slice(0, MAX_TOOL_OUTPUT_CHARS) + '\n...(truncated, result too large)';
@@ -68,6 +71,78 @@ export interface AssistantResponse {
 }
 
 export class Assistant {
+  /**
+   * When the Telegram layer fails after the assistant already returned, or for unexpected throws.
+   * Appends the user turn plus a short system-style assistant note so the next LLM call keeps context.
+   */
+  recoverFromExternalProcessingError(
+    chatId: number,
+    userText: string,
+    error: unknown
+  ): AssistantResponse {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error({ err: error, chatId }, 'Unexpected pipeline error');
+    this.appendFailedTurnForHistory(chatId, userText, errMsg);
+    return {
+      reply: `${this.userFacingFailureReply(errMsg)}\n\n${TRY_AGAIN_HINT}`,
+      trace: [`error: ${errMsg.slice(0, 300)}`],
+    };
+  }
+
+  private appendFailedTurnForHistory(chatId: number, userText: string, errMsg: string): void {
+    const assistantNote = this.modelContextFailureNote(errMsg);
+    chatHistory.append(chatId, [
+      { role: 'user', content: userText },
+      { role: 'assistant', content: assistantNote },
+    ]);
+    logger.info({ chatId }, 'Appended failed turn to chat history to preserve context');
+  }
+
+  private modelContextFailureNote(errMsg: string): string {
+    if (/429|Too Many Requests/i.test(errMsg)) {
+      return '[System note: The last user message was not answered because the LLM provider returned HTTP 429 (rate limit).]';
+    }
+    if (/timed out|Timeout|AbortError/i.test(errMsg)) {
+      return '[System note: The last user message was not answered because the LLM request timed out.]';
+    }
+    if (/NVIDIA HTTP|Gemini|Ollama|Failed to get response from AI/i.test(errMsg)) {
+      return '[System note: The last user message was not answered because the LLM provider returned an error.]';
+    }
+    return '[System note: The last user message was not answered due to a backend or provider error.]';
+  }
+
+  private userFacingFailureReply(errMsg: string): string {
+    if (/429|Too Many Requests/i.test(errMsg)) {
+      return 'The AI provider is temporarily rate-limiting requests.';
+    }
+    if (/timed out|Timeout/i.test(errMsg)) {
+      return 'The AI request took too long and was stopped.';
+    }
+    if (/HTTP 5\d{2}/i.test(errMsg)) {
+      return 'The AI provider returned a server error.';
+    }
+    if (/HTTP 4\d{2}/i.test(errMsg)) {
+      return 'The AI provider rejected or could not complete the request.';
+    }
+    return 'Something went wrong while processing your message.';
+  }
+
+  private recoverFromTurnFailure(
+    chatId: number,
+    userText: string,
+    error: unknown,
+    trace: string[]
+  ): AssistantResponse {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error({ err: error, chatId }, 'Assistant conversation turn failed');
+    trace.push(`error: ${errMsg.slice(0, 300)}`);
+    this.appendFailedTurnForHistory(chatId, userText, errMsg);
+    return {
+      reply: `${this.userFacingFailureReply(errMsg)}\n\n${TRY_AGAIN_HINT}`,
+      trace,
+    };
+  }
+
   async handleTextWithTrace(chatId: number, input: string): Promise<AssistantResponse> {
     const trimmed = input.trim();
     const trace: string[] = [];
@@ -98,9 +173,13 @@ export class Assistant {
     if (trimmed.startsWith('/mcp ')) {
       const instruction = trimmed.replace(/^\/mcp\s+/i, '').trim();
       if (instruction === 'tools' || instruction === 'help') {
-        const result = await mcpHostService.runTool('tools');
-        trace.push('action: tools_list');
-        return { reply: result.output, trace };
+        try {
+          const result = await mcpHostService.runTool('tools');
+          trace.push('action: tools_list');
+          return { reply: result.output, trace };
+        } catch (error) {
+          return this.recoverFromTurnFailure(chatId, trimmed, error, trace);
+        }
       }
     }
 
@@ -109,81 +188,85 @@ export class Assistant {
     const history = chatHistory.getHistory(chatId);
     trace.push(`history_messages: ${history.length}`);
 
-    // --- Phase 1: Triage ---
-    const triageMessages: LlmMessage[] = [
-      { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
-      ...history,
-      { role: 'user', content: trimmed },
-    ];
-
-    const triageResult = await llmService.chat(triageMessages, [ROUTE_TOOL_DEFINITION]);
-
-    const routeCall = triageResult.toolCalls.find(
-      (tc) => tc.function.name === 'route_to_tools'
-    );
-
-    let selectedCategories: string[] = [];
-
-    if (routeCall) {
-      const args = routeCall.function.arguments as { categories?: string[] };
-      selectedCategories = (args.categories ?? []).filter((id) =>
-        TOOL_CATEGORIES.some((c) => c.id === id)
-      );
-    }
-
-    // Fallback: If the model tried to call tools (either route_to_tools with invalid/empty args,
-    // or hallucinatorily called a direct tool in phase 1) but no valid categories were matched,
-    // we assume it needs tools and provide ALL categories in Phase 2 to ensure tools aren't missed.
-    if (selectedCategories.length === 0 && triageResult.toolCalls.length > 0) {
-      trace.push('phase: triage_fallback_all_categories');
-      selectedCategories = getCategoryIds();
-    }
-
-    if (selectedCategories.length === 0 && triageResult.content) {
-      trace.push('phase: triage_direct_answer');
-      const reply = triageResult.content;
-      const newMessages: LlmMessage[] = [
+    try {
+      // --- Phase 1: Triage ---
+      const triageMessages: LlmMessage[] = [
+        { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
+        ...history,
         { role: 'user', content: trimmed },
-        { role: 'assistant', content: reply },
       ];
+
+      const triageResult = await llmService.chat(triageMessages, [ROUTE_TOOL_DEFINITION]);
+
+      const routeCall = triageResult.toolCalls.find(
+        (tc) => tc.function.name === 'route_to_tools'
+      );
+
+      let selectedCategories: string[] = [];
+
+      if (routeCall) {
+        const args = routeCall.function.arguments as { categories?: string[] };
+        selectedCategories = (args.categories ?? []).filter((id) =>
+          TOOL_CATEGORIES.some((c) => c.id === id)
+        );
+      }
+
+      // Fallback: If the model tried to call tools (either route_to_tools with invalid/empty args,
+      // or hallucinatorily called a direct tool in phase 1) but no valid categories were matched,
+      // we assume it needs tools and provide ALL categories in Phase 2 to ensure tools aren't missed.
+      if (selectedCategories.length === 0 && triageResult.toolCalls.length > 0) {
+        trace.push('phase: triage_fallback_all_categories');
+        selectedCategories = getCategoryIds();
+      }
+
+      if (selectedCategories.length === 0 && triageResult.content) {
+        trace.push('phase: triage_direct_answer');
+        const reply = triageResult.content;
+        const newMessages: LlmMessage[] = [
+          { role: 'user', content: trimmed },
+          { role: 'assistant', content: reply },
+        ];
+        chatHistory.append(chatId, newMessages);
+        return { reply, trace };
+      }
+
+      if (selectedCategories.length === 0) {
+        trace.push('phase: triage_empty_fallback_to_phase2');
+      } else {
+        trace.push(`phase: routed → [${selectedCategories.join(', ')}]`);
+      }
+
+      // --- Phase 2: Execute with filtered tools ---
+      const allowedToolNames = getToolsForCategories(selectedCategories);
+      // Always include search tools so the model can look up entity names on errors
+      for (const name of ['ha_search_entities', 'ha_deep_search']) {
+        allowedToolNames.add(name);
+      }
+
+      const { definitions, dispatch } = await toolRegistry.loadTools(allowedToolNames);
+      trace.push(`tools_loaded: ${definitions.length}`);
+
+      const execMessages: LlmMessage[] = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...history,
+        { role: 'user', content: trimmed },
+      ];
+
+      const newMessages: LlmMessage[] = [{ role: 'user', content: trimmed }];
+      const { reply, turnMessages } = await this.runToolLoop(
+        execMessages,
+        definitions,
+        dispatch,
+        trace
+      );
+
+      newMessages.push(...turnMessages);
       chatHistory.append(chatId, newMessages);
+
       return { reply, trace };
+    } catch (error) {
+      return this.recoverFromTurnFailure(chatId, trimmed, error, trace);
     }
-
-    if (selectedCategories.length === 0) {
-      trace.push('phase: triage_empty_fallback_to_phase2');
-    } else {
-      trace.push(`phase: routed → [${selectedCategories.join(', ')}]`);
-    }
-
-    // --- Phase 2: Execute with filtered tools ---
-    const allowedToolNames = getToolsForCategories(selectedCategories);
-    // Always include search tools so the model can look up entity names on errors
-    for (const name of ['ha_search_entities', 'ha_deep_search']) {
-      allowedToolNames.add(name);
-    }
-
-    const { definitions, dispatch } = await toolRegistry.loadTools(allowedToolNames);
-    trace.push(`tools_loaded: ${definitions.length}`);
-
-    const execMessages: LlmMessage[] = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      ...history,
-      { role: 'user', content: trimmed },
-    ];
-
-    const newMessages: LlmMessage[] = [{ role: 'user', content: trimmed }];
-    const { reply, turnMessages } = await this.runToolLoop(
-      execMessages,
-      definitions,
-      dispatch,
-      trace
-    );
-
-    newMessages.push(...turnMessages);
-    chatHistory.append(chatId, newMessages);
-
-    return { reply, trace };
   }
 
   private async runToolLoop(
