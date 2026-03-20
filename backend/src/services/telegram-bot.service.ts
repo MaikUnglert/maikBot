@@ -1,5 +1,5 @@
 import TelegramBot, { Message } from 'node-telegram-bot-api';
-import { assistant } from '../core/assistant.js';
+import { assistant, type AssistantResponse } from '../core/assistant.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -10,6 +10,14 @@ function formatReplyForTelegramHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
   return escaped.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+}
+
+function formatAssistantReplyForTelegram(response: AssistantResponse): string {
+  const traceBlock =
+    config.telegramShowAgentTrace && response.trace.length > 0
+      ? `\n\n---\nAgent Trace:\n${response.trace.map((line) => `- ${line}`).join('\n')}`
+      : '';
+  return formatReplyForTelegramHtml(`${response.reply}${traceBlock}`).slice(0, 4096);
 }
 
 function isAllowedUser(userId: number | undefined): boolean {
@@ -58,40 +66,38 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
     return;
   }
 
+  let response: AssistantResponse | undefined;
   try {
     await bot.sendChatAction(chatId, 'typing');
     const typingInterval = setInterval(() => {
       bot.sendChatAction(chatId, 'typing').catch(() => { });
     }, 4500);
 
-    let response;
     try {
       response = await assistant.handleTextWithTrace(chatId, text);
     } finally {
       clearInterval(typingInterval);
     }
 
-    const traceBlock =
-      config.telegramShowAgentTrace && response.trace.length > 0
-        ? `\n\n---\nAgent Trace:\n${response.trace.map((line) => `- ${line}`).join('\n')}`
-        : '';
-
-    const formattedReply = formatReplyForTelegramHtml(`${response.reply}${traceBlock}`).slice(
-      0,
-      4096
-    );
-
-    await safeSendMessage(bot, chatId, formattedReply, {
+    await safeSendMessage(bot, chatId, formatAssistantReplyForTelegram(response), {
       reply_to_message_id: msg.message_id,
       parse_mode: 'HTML',
     });
   } catch (error) {
     logger.error({ err: error }, 'Failed to process Telegram message');
-    await safeSendMessage(
-      bot,
-      chatId,
-      'Internal processing error. Check backend logs and Ollama/MCP connectivity.'
-    );
+    if (!response) {
+      response = assistant.recoverFromExternalProcessingError(chatId, text, error);
+    } else {
+      response = {
+        reply:
+          'Could not send the previous reply via Telegram (formatting or network). Your conversation context was already updated. Try again or send a short follow-up.',
+        trace: [],
+      };
+    }
+    await safeSendMessage(bot, chatId, formatAssistantReplyForTelegram(response), {
+      reply_to_message_id: msg.message_id,
+      parse_mode: 'HTML',
+    });
   }
 }
 
