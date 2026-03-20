@@ -27,7 +27,7 @@ const envSchema = z.object({
   NVIDIA_API_KEY: z.string().optional(),
   NVIDIA_MODEL: z.string().min(1).default('moonshotai/kimi-k2.5'),
   NVIDIA_MAX_TOKENS: z.coerce.number().int().positive().default(16384),
-  NVIDIA_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  NVIDIA_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
 
   MCP_SERVERS_JSON: z.string().optional(),
   MCP_TOOL_POLICY_JSON: z.string().optional(),
