@@ -1,5 +1,9 @@
 import TelegramBot, { Message } from 'node-telegram-bot-api';
-import { assistant, type AssistantResponse } from '../core/assistant.js';
+import {
+  assistant,
+  type AssistantProgressCallback,
+  type AssistantResponse,
+} from '../core/assistant.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -18,6 +22,16 @@ function formatAssistantReplyForTelegram(response: AssistantResponse): string {
       ? `\n\n---\nAgent Trace:\n${response.trace.map((line) => `- ${line}`).join('\n')}`
       : '';
   return formatReplyForTelegramHtml(`${response.reply}${traceBlock}`).slice(0, 4096);
+}
+
+const PROGRESS_EDIT_THROTTLE_MS = 900;
+
+/** Status overlay only for turns that may hit the LLM (not instant slash commands). */
+function shouldShowProgressOverlay(text: string): boolean {
+  const t = text.trim();
+  if (t === '/clear' || t === '/status') return false;
+  if (t.startsWith('/model')) return false;
+  return true;
 }
 
 function isAllowedUser(userId: number | undefined): boolean {
@@ -67,16 +81,66 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
   }
 
   let response: AssistantResponse | undefined;
+  let progressMessageId: number | undefined;
+  /** Start negative so the first onProgress edit is never throttled. */
+  let lastProgressEditAt = -Number.MAX_VALUE;
+
+  const dismissProgressMessage = async (): Promise<void> => {
+    if (progressMessageId === undefined) return;
+    const id = progressMessageId;
+    progressMessageId = undefined;
+    try {
+      await bot.deleteMessage(chatId, id);
+    } catch {
+      /* already removed or missing rights */
+    }
+  };
+
+  const buildOnProgress = (): AssistantProgressCallback => {
+    return async (phase: string) => {
+      if (progressMessageId === undefined) return;
+      const now = Date.now();
+      if (now - lastProgressEditAt < PROGRESS_EDIT_THROTTLE_MS) {
+        return;
+      }
+      lastProgressEditAt = now;
+      try {
+        await bot.editMessageText(formatReplyForTelegramHtml(`⏳ ${phase}`), {
+          chat_id: chatId,
+          message_id: progressMessageId,
+          parse_mode: 'HTML',
+        });
+      } catch {
+        /* e.g. message not modified */
+      }
+    };
+  };
+
   try {
     await bot.sendChatAction(chatId, 'typing');
     const typingInterval = setInterval(() => {
       bot.sendChatAction(chatId, 'typing').catch(() => { });
     }, 4500);
 
+    if (shouldShowProgressOverlay(text)) {
+      try {
+        const sent = await bot.sendMessage(chatId, formatReplyForTelegramHtml('⏳ Working…'), {
+          reply_to_message_id: msg.message_id,
+          parse_mode: 'HTML',
+        });
+        progressMessageId = sent.message_id;
+      } catch (err) {
+        logger.warn({ err }, 'Could not send progress status message');
+      }
+    }
+
     try {
-      response = await assistant.handleTextWithTrace(chatId, text);
+      response = await assistant.handleTextWithTrace(chatId, text, {
+        onProgress: buildOnProgress(),
+      });
     } finally {
       clearInterval(typingInterval);
+      await dismissProgressMessage();
     }
 
     await safeSendMessage(bot, chatId, formatAssistantReplyForTelegram(response), {
@@ -84,6 +148,7 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
       parse_mode: 'HTML',
     });
   } catch (error) {
+    await dismissProgressMessage();
     logger.error({ err: error }, 'Failed to process Telegram message');
     if (!response) {
       response = assistant.recoverFromExternalProcessingError(chatId, text, error);

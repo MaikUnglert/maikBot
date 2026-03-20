@@ -91,6 +91,13 @@ export interface AssistantResponse {
   trace: string[];
 }
 
+/** Optional UI hook (e.g. Telegram status line). Must not throw. */
+export type AssistantProgressCallback = (phase: string) => void | Promise<void>;
+
+export interface AssistantHandleOptions {
+  onProgress?: AssistantProgressCallback;
+}
+
 export class Assistant {
   /**
    * When the Telegram layer fails after the assistant already returned, or for unexpected throws.
@@ -164,9 +171,20 @@ export class Assistant {
     };
   }
 
-  async handleTextWithTrace(chatId: number, input: string): Promise<AssistantResponse> {
+  async handleTextWithTrace(
+    chatId: number,
+    input: string,
+    options?: AssistantHandleOptions
+  ): Promise<AssistantResponse> {
     const trimmed = input.trim();
     const trace: string[] = [];
+    const report = async (phase: string): Promise<void> => {
+      try {
+        await options?.onProgress?.(phase);
+      } catch {
+        /* progress UI must not break the assistant */
+      }
+    };
 
     if (!trimmed) {
       return { reply: 'Please send a message.', trace };
@@ -210,17 +228,21 @@ export class Assistant {
     trace.push(`history_messages: ${history.length}`);
 
     try {
+      await report('Preparing…');
       let selectedCategories: string[] = [];
 
       if (config.llmSkipTriage) {
         trace.push('phase: skip_triage_all_categories');
+        await report('Loading tools (full catalog)…');
         selectedCategories = [...getCategoryIds()];
       } else {
         const fastCats = tryHaFastPathCategories(trimmed);
         if (fastCats) {
           trace.push(`phase: ha_fast_path → [${fastCats.join(', ')}]`);
+          await report('Quick path: device search & control…');
           selectedCategories = fastCats;
         } else {
+          await report('Routing your request…');
           const triageMessages: LlmMessage[] = [
             { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
             ...history,
@@ -258,6 +280,7 @@ export class Assistant {
 
           if (selectedCategories.length === 0 && triageResult.content) {
             trace.push('phase: triage_direct_answer');
+            await report('Writing reply…');
             const reply = triageResult.content;
             const newMessages: LlmMessage[] = [
               { role: 'user', content: trimmed },
@@ -276,6 +299,7 @@ export class Assistant {
       }
 
       // --- Phase 2: Execute with filtered tools ---
+      await report('Loading tools…');
       const allowedToolNames = getToolsForCategories(selectedCategories);
       for (const name of ['ha_search_entities', 'ha_deep_search']) {
         allowedToolNames.add(name);
@@ -295,7 +319,8 @@ export class Assistant {
         execMessages,
         definitions,
         dispatch,
-        trace
+        trace,
+        options?.onProgress
       );
 
       newMessages.push(...turnMessages);
@@ -311,13 +336,23 @@ export class Assistant {
     messages: LlmMessage[],
     definitions: ToolDefinition[],
     dispatch: Map<string, (args: Record<string, unknown>) => Promise<{ ok: boolean; output: string }>>,
-    trace: string[]
+    trace: string[],
+    onProgress?: AssistantProgressCallback
   ): Promise<{ reply: string; turnMessages: LlmMessage[] }> {
+    const report = async (phase: string): Promise<void> => {
+      try {
+        await onProgress?.(phase);
+      } catch {
+        /* ignore */
+      }
+    };
+
     let callCount = 0;
     const maxCalls = config.llmMaxToolCalls;
     const turnMessages: LlmMessage[] = [];
 
     while (true) {
+      await report('Calling the language model…');
       const result = await llmService.chat(messages, definitions);
 
       if (result.toolCalls.length === 0) {
@@ -325,6 +360,7 @@ export class Assistant {
         let reply = (result.content ?? '').trim();
         if (!reply) {
           trace.push('execution_path: empty_reply_retry');
+          await report('Finishing answer…');
           const retryMessages: LlmMessage[] = [
             ...messages,
             {
@@ -364,6 +400,7 @@ export class Assistant {
 
         trace.push(`tool_call[${callCount}]: ${toolName} args=${JSON.stringify(toolArgs)}`);
         logger.info({ toolName, toolArgs, callCount }, 'Executing tool call');
+        await report(`Running tool: ${toolName}…`);
 
         const handler = dispatch.get(toolName);
         let output: string;
@@ -399,6 +436,7 @@ export class Assistant {
       if (callCount >= maxCalls) {
         trace.push(`max_tool_calls_reached: ${maxCalls}`);
         logger.warn({ callCount, maxCalls }, 'Max tool calls reached, forcing final response');
+        await report('Summarizing (tool limit reached)…');
         const finalResult = await llmService.chat(messages, []);
         const reply =
           finalResult.content?.trim() ||
