@@ -6,11 +6,15 @@ import { config, type LlmProviderName } from '../config.js';
 import { logger } from '../logger.js';
 import {
   TOOL_CATEGORIES,
+  TRIAGE_HA_CATEGORY_IDS,
   getCategoryIds,
   getToolsForCategories,
-  buildCategoryListForPrompt,
+  getAlwaysLoadedToolNames,
+  buildTriageCategoryListForPrompt,
 } from './tool-categories.js';
 import type { LlmMessage, ToolDefinition } from '../services/llm.types.js';
+import { readMemory } from './tools/memory.js';
+import type { SessionId } from './channel-types.js';
 
 const MAX_TOOL_OUTPUT_CHARS = 8000;
 
@@ -43,26 +47,110 @@ function tryHaFastPathCategories(text: string): string[] | null {
   return null;
 }
 
-const SYSTEM_PROMPT = `You are MaikBot, a local AI assistant running on a home server.
+/**
+ * Detect URL or website requests. When present, browser category must be included
+ * so the agent gets browser_navigate etc. Returns ['browser'] or null.
+ */
+function tryUrlFastPathCategories(text: string): string[] | null {
+  const t = text.trim();
+  if (t.length > 500 || t.startsWith('/')) return null;
+  const hasUrl = /https?:\/\/[^\s]+/i.test(t);
+  const hasWebsiteMention =
+    /\b(zeit\.de|spiegel\.de|website|webseite|seite\s+öffnen|öffne\s+die|auf\s+(diesen\s+)?link|diesen\s+link|zugreif(en|en\s+auf)|website|webpage)\b/i.test(t);
+  if (hasUrl || hasWebsiteMention) {
+    return ['browser'];
+  }
+  return null;
+}
+
+/** Returns true if the message looks like a save confirmation (ja, yes, ok, etc.). */
+function looksLikeSaveConfirmation(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (t.length > 50) return false;
+  return (
+    /^(ja|yes|yep|yeah|ok|sure|bitte|gerne|ja\s+bitte|ja\s+gerne|speichern?|save\s*it?)$/i.test(t) ||
+    /^(ja|yes)\s*[,!.]?\s*$/i.test(t)
+  );
+}
+
+/** Returns true if the most recent assistant message asks whether to save to memory. */
+function lastAssistantAskedToSave(messages: LlmMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'assistant') continue;
+    const content = typeof m.content === 'string' ? m.content : '';
+    return (
+      /should I save this to memory/i.test(content) ||
+      /soll ich (das|es) (in die )?memory/i.test(content) ||
+      /sollen wir (das|es) speichern/i.test(content) ||
+      /save (this|it) to memory\?/i.test(content)
+    );
+  }
+  return false;
+}
+
+function buildSystemPrompt(memoryContent: string): string {
+  const now = new Date();
+  const memoryPath = `${config.memoryDataDir}/memory.md`;
+  const timeStr = now.toLocaleString('en-GB', {
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+
+  const memorySection =
+    memoryContent.trim().length > 0
+      ? `
+
+--- Memory (memory.md) ---
+${memoryContent}
+--- End of memory ---
+`
+      : '';
+
+  const browserNote = config.browserEnabled
+    ? ' You CAN browse the web: use browser_navigate to open URLs, browser_snapshot to read page content. Use these when the user asks about a website or sends a link.'
+    : '';
+  const visionNote =
+    config.geminiApiKey || config.ollamaBaseUrl
+      ? ' You can analyze images (vision_analyze_image) when the user sends a photo or provides an image path.'
+      : '';
+
+  return `You are MaikBot, a local AI assistant running on a home server.
+
+Current date and time: ${timeStr}
+${memorySection}
+
 Rules:
 1) Respond briefly and clearly in English unless the user explicitly asks for another language.
-2) You have access to tools (smart home, shell, etc.). Use them when the user's request requires it.
+2) You have access to tools (smart home, shell, browser, etc.). Use them when the user's request requires it.${browserNote}${visionNote}
 3) Do not invent tool results or device states. Only report what tools return.
 4) If a tool call fails with a name/match error, call ha_search_entities or ha_deep_search first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
-5) For shell commands, prefer concise output (e.g. use flags like -h, --no-pager, head/tail).
+5) For shell commands, prefer concise output (e.g. use flags like -h, --no-pager, head/tail). For long-running commands (npm install, large downloads), use shell_exec with async=true and shell_job_result to fetch output when done.
 6) On errors, provide concrete next steps.
-7) Persistent memory is stored in per-domain Markdown files on disk (memory_* tools). It is NOT in your context until you call memory_read. For Home Assistant nicknames (e.g. user says "Schreibtisch" for a lamp), call memory_read(domain home_assistant) when resolving names; after you confirm the correct entity_id, save it with memory_append (new line) or memory_str_replace (edit existing text — copy old_string exactly from memory_read, one unique match).
-8) Do not claim you "remember" HA entity mappings unless they came from memory_read in this turn or from tool output in this conversation.`;
+7) File operations: Use shell_exec to read, write, and edit files. You can read (cat), append (echo ... >>), or edit with sed.
+8) Memory: The content of memory.md is shown above. When it makes sense to persist something (nicknames for HA entities, user preferences, learned facts), ask: "Should I save this to memory?" and wait for confirmation. When the user confirms, use shell_exec to append (e.g. echo "- Schreibtisch -> light.desk_lamp" >> ${memoryPath}) or edit with sed. File path: ${memoryPath}
+9) Do not claim you "remember" something unless it appears in the memory section above or in tool output in this conversation.
+10) For reminders ("remind me in X"), daily tasks ("weather every morning at 10"), or weekly tasks ("every Monday at 9am weekly recap"), use schedule_reminder, schedule_daily, or schedule_weekly.
+11) For larger coding tasks (multi-file refactors, complex features), use gemini_cli_delegate. Do not use shell_exec for long-running gemini commands.`;
+}
 
-const TRIAGE_SYSTEM_PROMPT = `You are MaikBot, an AI assistant with smart-home and shell tools.
-Your job right now: decide if the user's message needs tools, and if so, which category.
+const TRIAGE_SYSTEM_PROMPT = `You are MaikBot. The agent ALWAYS has: shell, browser, vision, schedule, gemini_cli, agent config, and Home Assistant search + control (search entities, turn on/off, get state).
+Your job: decide if the user needs ADDITIONAL Home Assistant categories. Call route_to_tools only when they need:
+- automation (create/edit automations, scripts)
+- config (areas, groups, helpers, zones, integrations)
+- dashboard (edit dashboards, cards)
+- history (sensor history, statistics, logbook, camera)
+- calendar (calendar events, todos)
+- system (restart, backups, updates, add-ons)
+- hacs (HACS integrations)
 
-Available tool categories:
-${buildCategoryListForPrompt()}
+Additional categories (add only when needed):
+${buildTriageCategoryListForPrompt()}
 
-If the user's request requires tools, call the route_to_tools function with the relevant category IDs.
-If you can answer directly without any tools (e.g. general knowledge, math, conversation), just reply with text.
-IMPORTANT: When in doubt, route to tools. It is better to route unnecessarily than to miss a tool call.
+If the user needs one or more of the above, call route_to_tools with those category IDs.
+If the user's request can be handled with the base tools (search, control, shell, browser) or needs no tools, just reply with text—do NOT call route_to_tools.
+IMPORTANT: Only call route_to_tools when they explicitly need automation, config, dashboard, history, calendar, system, or hacs.
 Respond in English unless the user explicitly asks for another language.`;
 
 const ROUTE_TOOL_DEFINITION: ToolDefinition = {
@@ -70,7 +158,7 @@ const ROUTE_TOOL_DEFINITION: ToolDefinition = {
   function: {
     name: 'route_to_tools',
     description:
-      'Select which tool categories are needed to handle the user request. Call this when the user needs smart-home control, system commands, or any action that requires tools.',
+      'Add Home Assistant categories: automation, config, dashboard, history, calendar, system, hacs. Call only when the user needs these specific capabilities.',
     parameters: {
       type: 'object',
       required: ['categories'],
@@ -79,9 +167,9 @@ const ROUTE_TOOL_DEFINITION: ToolDefinition = {
           type: 'array',
           items: {
             type: 'string',
-            enum: getCategoryIds(),
+            enum: [...TRIAGE_HA_CATEGORY_IDS],
           },
-          description: 'One or more tool category IDs needed for this request',
+          description: 'Additional HA category IDs to load (automation, config, dashboard, history, calendar, system, hacs)',
         },
       },
     },
@@ -98,6 +186,8 @@ export type AssistantProgressCallback = (phase: string) => void | Promise<void>;
 
 export interface AssistantHandleOptions {
   onProgress?: AssistantProgressCallback;
+  /** Attached image (e.g. from Telegram photo). Sent directly to vision-capable models. */
+  attachedImage?: { base64: string; mimeType: string };
 }
 
 export class Assistant {
@@ -106,26 +196,26 @@ export class Assistant {
    * Appends the user turn plus a short system-style assistant note so the next LLM call keeps context.
    */
   recoverFromExternalProcessingError(
-    chatId: number,
+    sessionId: SessionId,
     userText: string,
     error: unknown
   ): AssistantResponse {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ err: error, chatId }, 'Unexpected pipeline error');
-    this.appendFailedTurnForHistory(chatId, userText, errMsg);
+    logger.error({ err: error, sessionId }, 'Unexpected pipeline error');
+    this.appendFailedTurnForHistory(sessionId, userText, errMsg);
     return {
       reply: `${this.userFacingFailureReply(errMsg)}\n\n${TRY_AGAIN_HINT}`,
       trace: [`error: ${errMsg.slice(0, 300)}`],
     };
   }
 
-  private appendFailedTurnForHistory(chatId: number, userText: string, errMsg: string): void {
+  private appendFailedTurnForHistory(sessionId: SessionId, userText: string, errMsg: string): void {
     const assistantNote = this.modelContextFailureNote(errMsg);
-    chatHistory.append(chatId, [
+    chatHistory.append(sessionId, [
       { role: 'user', content: userText },
       { role: 'assistant', content: assistantNote },
     ]);
-    logger.info({ chatId }, 'Appended failed turn to chat history to preserve context');
+    logger.info({ sessionId }, 'Appended failed turn to chat history to preserve context');
   }
 
   private modelContextFailureNote(errMsg: string): string {
@@ -158,15 +248,15 @@ export class Assistant {
   }
 
   private recoverFromTurnFailure(
-    chatId: number,
+    sessionId: SessionId,
     userText: string,
     error: unknown,
     trace: string[]
   ): AssistantResponse {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ err: error, chatId }, 'Assistant conversation turn failed');
+    logger.error({ err: error, sessionId }, 'Assistant conversation turn failed');
     trace.push(`error: ${errMsg.slice(0, 300)}`);
-    this.appendFailedTurnForHistory(chatId, userText, errMsg);
+    this.appendFailedTurnForHistory(sessionId, userText, errMsg);
     return {
       reply: `${this.userFacingFailureReply(errMsg)}\n\n${TRY_AGAIN_HINT}`,
       trace,
@@ -174,7 +264,7 @@ export class Assistant {
   }
 
   async handleTextWithTrace(
-    chatId: number,
+    sessionId: SessionId,
     input: string,
     options?: AssistantHandleOptions
   ): Promise<AssistantResponse> {
@@ -197,13 +287,13 @@ export class Assistant {
     }
 
     if (trimmed === '/clear') {
-      chatHistory.clear(chatId);
+      chatHistory.clear(sessionId);
       trace.push('action: history_cleared');
       return { reply: 'Chat history cleared.', trace };
     }
 
     if (trimmed === '/status') {
-      const stats = chatHistory.getStats(chatId);
+      const stats = chatHistory.getStats(sessionId);
       trace.push('action: status');
       return {
         reply: `Model: ${llmService.modelLabel}\nMessages in context: ${stats.messageCount}\nEstimated tokens: ${stats.estimatedTokens}`,
@@ -219,15 +309,21 @@ export class Assistant {
           trace.push('action: tools_list');
           return { reply: result.output, trace };
         } catch (error) {
-          return this.recoverFromTurnFailure(chatId, trimmed, error, trace);
+          return this.recoverFromTurnFailure(sessionId, trimmed, error, trace);
         }
       }
     }
 
     trace.push(`provider: ${llmService.modelLabel}`);
 
-    const history = chatHistory.getHistory(chatId);
+    const history = chatHistory.getHistory(sessionId);
     trace.push(`history_messages: ${history.length}`);
+
+    const currentUserMessage: LlmMessage = {
+      role: 'user',
+      content: trimmed,
+      ...(options?.attachedImage && { imageAttachment: options.attachedImage }),
+    };
 
     try {
       await report('Preparing…');
@@ -239,16 +335,21 @@ export class Assistant {
         selectedCategories = [...getCategoryIds()];
       } else {
         const fastCats = tryHaFastPathCategories(trimmed);
+        const urlCats = tryUrlFastPathCategories(trimmed);
         if (fastCats) {
           trace.push(`phase: ha_fast_path → [${fastCats.join(', ')}]`);
           await report('Quick path: device search & control…');
           selectedCategories = fastCats;
+        } else if (urlCats) {
+          trace.push(`phase: url_fast_path → [${urlCats.join(', ')}]`);
+          await report('Loading browser tools…');
+          selectedCategories = urlCats;
         } else {
           await report('Routing your request…');
           const triageMessages: LlmMessage[] = [
             { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
             ...history,
-            { role: 'user', content: trimmed },
+            currentUserMessage,
           ];
 
           const triageResult = await llmService.chat(triageMessages, [ROUTE_TOOL_DEFINITION]);
@@ -280,15 +381,23 @@ export class Assistant {
             selectedCategories = getCategoryIds();
           }
 
-          if (selectedCategories.length === 0 && triageResult.content) {
+          const pendingSaveConfirmation =
+            selectedCategories.length === 0 &&
+            looksLikeSaveConfirmation(trimmed) &&
+            lastAssistantAskedToSave(history);
+
+          if (pendingSaveConfirmation) {
+            trace.push('phase: save_confirmation_force_shell');
+            selectedCategories = ['shell'];
+          } else if (selectedCategories.length === 0 && triageResult.content) {
             trace.push('phase: triage_direct_answer');
             await report('Writing reply…');
             const reply = triageResult.content;
-            const newMessages: LlmMessage[] = [
-              { role: 'user', content: trimmed },
+            const { imageAttachment: _img, ...userMsgRest } = currentUserMessage;
+            chatHistory.append(sessionId, [
+              userMsgRest as LlmMessage,
               { role: 'assistant', content: reply },
-            ];
-            chatHistory.append(chatId, newMessages);
+            ]);
             return { reply, trace };
           }
 
@@ -300,33 +409,25 @@ export class Assistant {
         }
       }
 
-      // --- Phase 2: Execute with filtered tools ---
+      // --- Phase 2: Load tools (base always + triage HA on demand) ---
       await report('Loading tools…');
-      const allowedToolNames = getToolsForCategories(selectedCategories);
-      for (const name of ['ha_search_entities', 'ha_deep_search']) {
+      const allowedToolNames = new Set(getAlwaysLoadedToolNames());
+      for (const name of getToolsForCategories(selectedCategories)) {
         allowedToolNames.add(name);
       }
+      const { definitions, dispatch } = await toolRegistry.loadTools(allowedToolNames, {
+        sessionId,
+      });
+      trace.push(`tools_loaded: ${definitions.length} (base + [${selectedCategories.join(', ')}])`);
 
-      const toolNameList = [...allowedToolNames];
-      const attachMemoryTools =
-        toolNameList.some((n) => n.startsWith('ha_')) ||
-        toolNameList.some((n) => n.startsWith('memory_'));
-      if (attachMemoryTools) {
-        for (const name of ['memory_read', 'memory_append', 'memory_str_replace']) {
-          allowedToolNames.add(name);
-        }
-      }
-
-      const { definitions, dispatch } = await toolRegistry.loadTools(allowedToolNames);
-      trace.push(`tools_loaded: ${definitions.length}`);
-
+      const memoryContent = await readMemory();
       const execMessages: LlmMessage[] = [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: buildSystemPrompt(memoryContent) },
         ...history,
-        { role: 'user', content: trimmed },
+        currentUserMessage,
       ];
 
-      const newMessages: LlmMessage[] = [{ role: 'user', content: trimmed }];
+      const newMessages: LlmMessage[] = [currentUserMessage];
       const { reply, turnMessages } = await this.runToolLoop(
         execMessages,
         definitions,
@@ -336,12 +437,39 @@ export class Assistant {
       );
 
       newMessages.push(...turnMessages);
-      chatHistory.append(chatId, newMessages);
+      const messagesForHistory = newMessages.map((m) => {
+        const { imageAttachment: _, ...rest } = m;
+        return rest as LlmMessage;
+      });
+      chatHistory.append(sessionId, messagesForHistory);
 
       return { reply, trace };
     } catch (error) {
-      return this.recoverFromTurnFailure(chatId, trimmed, error, trace);
+      return this.recoverFromTurnFailure(sessionId, trimmed, error, trace);
     }
+  }
+
+  /** User-friendly progress text for Telegram overlay (avoid technical tool names). */
+  private getProgressPhaseForTool(
+    toolName: string,
+    _toolArgs: Record<string, unknown>
+  ): string {
+    const phases: Record<string, string> = {
+      shell_exec: 'Running your command…',
+      shell_job_result: 'Checking command result…',
+      gemini_cli_delegate: 'Starting Gemini CLI…',
+      gemini_cli_status: 'Checking Gemini CLI status…',
+      schedule_reminder: 'Setting reminder…',
+      schedule_daily: 'Setting daily task…',
+      schedule_weekly: 'Setting weekly task…',
+      schedule_list: 'Listing scheduled tasks…',
+      schedule_cancel: 'Cancelling task…',
+      agent_config_get: 'Reading config…',
+      agent_config_set: 'Updating config…',
+    };
+    if (phases[toolName]) return phases[toolName];
+    if (toolName.startsWith('ha_')) return 'Calling Home Assistant…';
+    return 'Working…';
   }
 
   private async runToolLoop(
@@ -360,7 +488,7 @@ export class Assistant {
     };
 
     let callCount = 0;
-    const maxCalls = config.llmMaxToolCalls;
+    const maxCalls = config.llmMaxToolCalls; // 0 = unlimited
     const turnMessages: LlmMessage[] = [];
 
     while (true) {
@@ -412,7 +540,8 @@ export class Assistant {
 
         trace.push(`tool_call[${callCount}]: ${toolName} args=${JSON.stringify(toolArgs)}`);
         logger.info({ toolName, toolArgs, callCount }, 'Executing tool call');
-        await report(`Running tool: ${toolName}…`);
+        const progressPhase = this.getProgressPhaseForTool(toolName, toolArgs);
+        await report(progressPhase);
 
         const handler = dispatch.get(toolName);
         let output: string;
@@ -445,7 +574,7 @@ export class Assistant {
         turnMessages.push(toolMsg);
       }
 
-      if (callCount >= maxCalls) {
+      if (maxCalls > 0 && callCount >= maxCalls) {
         trace.push(`max_tool_calls_reached: ${maxCalls}`);
         logger.warn({ callCount, maxCalls }, 'Max tool calls reached, forcing final response');
         await report('Summarizing (tool limit reached)…');
@@ -503,8 +632,8 @@ export class Assistant {
     };
   }
 
-  async handleText(chatId: number, input: string): Promise<string> {
-    const result = await this.handleTextWithTrace(chatId, input);
+  async handleText(sessionId: SessionId, input: string): Promise<string> {
+    const result = await this.handleTextWithTrace(sessionId, input);
     return result.reply;
   }
 }

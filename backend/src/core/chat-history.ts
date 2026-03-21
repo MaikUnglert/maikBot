@@ -1,5 +1,7 @@
 import { logger } from '../logger.js';
+import { config } from '../config.js';
 import type { LlmMessage } from '../services/llm.types.js';
+import type { SessionId } from './channel-types.js';
 
 interface ChatSession {
   messages: LlmMessage[];
@@ -9,11 +11,11 @@ interface ChatSession {
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 
 export class ChatHistory {
-  private sessions = new Map<number, ChatSession>();
+  private sessions = new Map<SessionId, ChatSession>();
 
   constructor(
     private maxMessages: number = 50,
-    private maxAgeMs: number = 60 * 60 * 1000, // 1 hour
+    private maxAgeMs: number = config.chatMaxAgeMs,
     private maxContextTokens: number = 100_000
   ) {}
 
@@ -21,9 +23,9 @@ export class ChatHistory {
    * Returns the stored conversation history for a chat.
    * Automatically prunes expired sessions.
    */
-  getHistory(chatId: number): LlmMessage[] {
+  getHistory(sessionId: SessionId): LlmMessage[] {
     this.pruneExpired();
-    const session = this.sessions.get(chatId);
+    const session = this.sessions.get(sessionId);
     return session ? [...session.messages] : [];
   }
 
@@ -31,11 +33,11 @@ export class ChatHistory {
    * Appends messages to a chat session. Trims oldest messages
    * if the session exceeds maxMessages or estimated token budget.
    */
-  append(chatId: number, messages: LlmMessage[]): void {
-    let session = this.sessions.get(chatId);
+  append(sessionId: SessionId, messages: LlmMessage[]): void {
+    let session = this.sessions.get(sessionId);
     if (!session) {
       session = { messages: [], lastActivity: Date.now() };
-      this.sessions.set(chatId, session);
+      this.sessions.set(sessionId, session);
     }
 
     session.messages.push(...messages);
@@ -44,17 +46,43 @@ export class ChatHistory {
     this.trimSession(session);
   }
 
-  clear(chatId: number): boolean {
-    const existed = this.sessions.has(chatId);
-    this.sessions.delete(chatId);
+  clear(sessionId: SessionId): boolean {
+    const existed = this.sessions.has(sessionId);
+    this.sessions.delete(sessionId);
     if (existed) {
-      logger.info({ chatId }, 'Chat history cleared');
+      logger.info({ sessionId }, 'Chat history cleared');
     }
     return existed;
   }
 
-  getStats(chatId: number): { messageCount: number; estimatedTokens: number } {
-    const session = this.sessions.get(chatId);
+  /**
+   * Get a compact context snapshot for delegation (e.g. Gemini CLI job).
+   * Used when the agent hands off a task so the review step has full context.
+   */
+  getContextSnapshot(
+    sessionId: SessionId,
+    userRequest: string,
+    maxMessages: number = 10
+  ): { userRequest: string; recentMessages: Array<{ role: string; content: string }> } {
+    const session = this.sessions.get(sessionId);
+    const recentMessages: Array<{ role: string; content: string }> = [];
+    if (session) {
+      const take = session.messages.slice(-maxMessages);
+      for (const msg of take) {
+        const content =
+          typeof msg.content === 'string'
+            ? msg.content.slice(0, 4000)
+            : String(msg.content ?? '');
+        if (content) {
+          recentMessages.push({ role: msg.role, content });
+        }
+      }
+    }
+    return { userRequest, recentMessages };
+  }
+
+  getStats(sessionId: SessionId): { messageCount: number; estimatedTokens: number } {
+    const session = this.sessions.get(sessionId);
     if (!session) return { messageCount: 0, estimatedTokens: 0 };
     return {
       messageCount: session.messages.length,
@@ -90,10 +118,10 @@ export class ChatHistory {
 
   private pruneExpired(): void {
     const now = Date.now();
-    for (const [chatId, session] of this.sessions) {
+    for (const [sessionId, session] of this.sessions) {
       if (now - session.lastActivity > this.maxAgeMs) {
-        this.sessions.delete(chatId);
-        logger.debug({ chatId }, 'Chat session expired');
+        this.sessions.delete(sessionId);
+        logger.debug({ sessionId }, 'Chat session expired');
       }
     }
   }

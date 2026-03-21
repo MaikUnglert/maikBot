@@ -18,17 +18,19 @@ const envSchema = z.object({
 
   OLLAMA_BASE_URL: z.string().url().default('http://127.0.0.1:11434'),
   OLLAMA_MODEL: z.string().min(1).default('qwen2.5:7b-instruct'),
-  OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
+  /** Vision model for screenshot analysis (llava, llava:13b, etc.). Used when Gemini is not configured. */
+  OLLAMA_VISION_MODEL: z.string().min(1).default('llava'),
+  OLLAMA_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
 
   GEMINI_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
   GEMINI_FALLBACK_MODEL: z.string().optional(),
-  GEMINI_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  GEMINI_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
 
   NVIDIA_API_KEY: z.string().optional(),
   NVIDIA_MODEL: z.string().min(1).default('moonshotai/kimi-k2.5'),
   NVIDIA_MAX_TOKENS: z.coerce.number().int().positive().default(16384),
-  NVIDIA_TIMEOUT_MS: z.coerce.number().int().positive().default(180000),
+  NVIDIA_TIMEOUT_MS: z.coerce.number().int().positive().default(300000),
   /** Extra attempts after HTTP 429 (fixed pause between each retry). */
   NVIDIA_429_MAX_RETRIES: z.coerce.number().int().min(0).max(10).default(3),
   NVIDIA_429_BACKOFF_MS: z.coerce.number().int().positive().default(1000),
@@ -36,7 +38,8 @@ const envSchema = z.object({
   MCP_SERVERS_JSON: z.string().optional(),
   MCP_TOOL_POLICY_JSON: z.string().optional(),
   MCP_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
-  LLM_MAX_TOOL_CALLS: z.coerce.number().int().positive().default(10),
+  /** Max tool calls per turn. 0 = unlimited. */
+  LLM_MAX_TOOL_CALLS: z.coerce.number().int().min(0).default(0),
   SHELL_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   TELEGRAM_SHOW_AGENT_TRACE: booleanString.default('false'),
   /** Skip triage LLM call; load all tool categories in one phase (fewer API calls, larger tool schema). */
@@ -47,8 +50,48 @@ const envSchema = z.object({
   /** Directory for domain memory files (*.md), e.g. entity nicknames. Default: <cwd>/data/memory */
   MEMORY_DATA_DIR: z.string().optional(),
 
+  /** Heartbeat: interval in seconds when work is pending (tasks due soon, running Gemini jobs). Default: 60. */
+  HEARTBEAT_ACTIVE_INTERVAL_SEC: z.coerce.number().int().positive().default(60),
+  /** Heartbeat: interval in seconds when idle (no tasks, no running jobs). Default: 1800 (30 min). */
+  HEARTBEAT_IDLE_INTERVAL_SEC: z.coerce.number().int().positive().default(1800),
+  /** Directory for scheduled tasks JSON. Default: <cwd>/data/scheduler */
+  SCHEDULER_DATA_DIR: z.string().optional(),
+
+  /** Directory for Gemini CLI job state. Default: <cwd>/data/jobs */
+  JOBS_DATA_DIR: z.string().optional(),
+  /** Directory for async shell job output. Default: <cwd>/data/shell-jobs */
+  SHELL_JOBS_DATA_DIR: z.string().optional(),
+  /** Allowed workspace root for Gemini CLI (must be absolute path). Default: process.cwd() */
+  GEMINI_CLI_WORKSPACE_ROOT: z.string().optional(),
+
+  /** Chat session max age in ms before pruning. Default: 24h (for long-running Gemini CLI jobs). */
+  CHAT_MAX_AGE_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
+
   HA_MCP_BASE_URL: z.string().url().optional(),
   HA_MCP_API_KEY: z.string().optional(),
+
+  /** WhatsApp (Baileys): enable channel. Default false. */
+  WHATSAPP_ENABLED: booleanString.default('false'),
+  /** Auth dir for Baileys session. Default: <cwd>/data/whatsapp-auth */
+  WHATSAPP_AUTH_DIR: z.string().optional(),
+  /** Comma-separated E.164 numbers (e.g. +491234567890) or * for open. Empty = require allowlist. */
+  WHATSAPP_ALLOWED_FROM: z.string().default(''),
+  /** Allow all senders when allowlist is empty (dangerous). Default false. */
+  WHATSAPP_ALLOW_EMPTY_ALLOWLIST: booleanString.default('false'),
+  /** Print QR code in terminal for first-time linking. Default true. */
+  WHATSAPP_PRINT_QR: booleanString.default('true'),
+  /** Allow group chats (group participants must be in allowlist). Default false. */
+  WHATSAPP_GROUPS_ENABLED: booleanString.default('false'),
+  /** Only process "Message to yourself" (self-chat); ignore all other senders. Default false. */
+  WHATSAPP_SELF_ONLY: booleanString.default('false'),
+
+  /** Browser automation: enable Playwright-based web browsing. Default false. */
+  BROWSER_ENABLED: booleanString.default('false'),
+  /** Run browser headless (no visible window). Default true. */
+  BROWSER_HEADLESS: booleanString.default('true'),
+  /** Timeout for page operations in ms. Default 30000. */
+  BROWSER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
@@ -160,6 +203,41 @@ function resolveMemoryDataDir(raw: string | undefined): string {
   return path.resolve(process.cwd(), 'data', 'memory');
 }
 
+function resolveSchedulerDataDir(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return path.resolve(process.cwd(), 'data', 'scheduler');
+}
+
+function resolveJobsDataDir(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return path.resolve(process.cwd(), 'data', 'jobs');
+}
+
+function resolveShellJobsDataDir(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return path.resolve(process.cwd(), 'data', 'shell-jobs');
+}
+
+function resolveGeminiCliWorkspace(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return process.cwd();
+}
+
+function resolveWhatsAppAuthDir(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return path.resolve(process.cwd(), 'data', 'whatsapp-auth');
+}
+
+function parseWhatsAppAllowedFrom(raw: string): Set<string> {
+  const entries = raw.split(',').map((e) => e.trim()).filter(Boolean);
+  return new Set(entries);
+}
+
 export type LlmProviderName = 'ollama' | 'gemini' | 'nvidia';
 
 export const config = {
@@ -171,6 +249,7 @@ export const config = {
 
   ollamaBaseUrl: env.OLLAMA_BASE_URL.replace(/\/$/, ''),
   ollamaModel: env.OLLAMA_MODEL,
+  ollamaVisionModel: env.OLLAMA_VISION_MODEL,
   ollamaTimeoutMs: env.OLLAMA_TIMEOUT_MS,
 
   geminiApiKey: env.GEMINI_API_KEY,
@@ -196,5 +275,24 @@ export const config = {
   llmSkipTriage: env.LLM_SKIP_TRIAGE,
   llmHaFastPath: env.LLM_HA_FAST_PATH,
   memoryDataDir: resolveMemoryDataDir(env.MEMORY_DATA_DIR),
+  heartbeatActiveIntervalSec: env.HEARTBEAT_ACTIVE_INTERVAL_SEC,
+  heartbeatIdleIntervalSec: env.HEARTBEAT_IDLE_INTERVAL_SEC,
+  schedulerDataDir: resolveSchedulerDataDir(env.SCHEDULER_DATA_DIR),
+  jobsDataDir: resolveJobsDataDir(env.JOBS_DATA_DIR),
+  shellJobsDataDir: resolveShellJobsDataDir(env.SHELL_JOBS_DATA_DIR),
+  geminiCliWorkspaceRoot: resolveGeminiCliWorkspace(env.GEMINI_CLI_WORKSPACE_ROOT),
+  chatMaxAgeMs: env.CHAT_MAX_AGE_MS,
   logLevel: env.LOG_LEVEL,
+
+  whatsappEnabled: env.WHATSAPP_ENABLED,
+  whatsappAuthDir: resolveWhatsAppAuthDir(env.WHATSAPP_AUTH_DIR),
+  whatsappAllowedFrom: parseWhatsAppAllowedFrom(env.WHATSAPP_ALLOWED_FROM),
+  whatsappAllowEmptyAllowlist: env.WHATSAPP_ALLOW_EMPTY_ALLOWLIST,
+  whatsappPrintQR: env.WHATSAPP_PRINT_QR,
+  whatsappGroupsEnabled: env.WHATSAPP_GROUPS_ENABLED,
+  whatsappSelfOnly: env.WHATSAPP_SELF_ONLY,
+
+  browserEnabled: env.BROWSER_ENABLED,
+  browserHeadless: env.BROWSER_HEADLESS,
+  browserTimeoutMs: env.BROWSER_TIMEOUT_MS,
 };

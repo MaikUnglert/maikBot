@@ -5,3 +5,21 @@ dist/
 # Per-chatbot learned notes (entity nicknames, etc.)
 data/memory/*
 !data/memory/.gitkeep
+
+# Scheduled tasks (reminders, daily jobs)
+data/scheduler/*
+!data/scheduler/.gitkeep
+
+# Gemini CLI job state
+data/jobs/*
+!data/jobs/.gitkeep
+
+# Async shell job output
+data/shell-jobs/*
+!data/shell-jobs/.gitkeep
+
+# WhatsApp Baileys auth (session credentials)
+data/whatsapp-auth/
+
+# Single-instance lock (runtime, not committed)
+data/.maikbot.lock

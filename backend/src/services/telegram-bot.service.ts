@@ -6,6 +6,9 @@ import {
 } from '../core/assistant.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { sessionIdTelegram } from '../core/channel-types.js';
+import { llmService } from './llm.service.js';
+import { analyzeImage } from './vision.service.js';
 
 /** Escape for Telegram HTML parse mode, then turn **bold** into <b>…</b>. */
 function formatReplyForTelegramHtml(text: string): string {
@@ -65,10 +68,37 @@ async function safeSendMessage(
   }
 }
 
+async function downloadTelegramPhoto(bot: TelegramBot, fileId: string): Promise<Buffer | null> {
+  try {
+    const file = await bot.getFile(fileId);
+    if (!file.file_path) {
+      logger.warn('Telegram getFile returned no file_path');
+      return null;
+    }
+    const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (err) {
+    logger.warn({ err, fileId }, 'Failed to download Telegram photo');
+    return null;
+  }
+}
+
+function providerSupportsNativeVision(): boolean {
+  const provider = llmService.getActiveProviderName();
+  return provider === 'nvidia' || provider === 'gemini';
+}
+
+function hasFallbackVision(): boolean {
+  return !!(config.geminiApiKey || config.ollamaBaseUrl);
+}
+
 async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
   const userId = msg.from?.id;
   const chatId = msg.chat.id;
-  const text = msg.text;
+  const sessionId = sessionIdTelegram(chatId);
 
   if (!isAllowedUser(userId)) {
     logger.warn({ userId }, 'Blocked Telegram user (not in allowlist)');
@@ -76,7 +106,41 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
     return;
   }
 
-  if (!text) {
+  let text = msg.text ?? msg.caption ?? '';
+  let attachedImage: { base64: string; mimeType: string } | undefined;
+
+  if (msg.photo && msg.photo.length > 0) {
+    const largestPhoto = msg.photo[msg.photo.length - 1];
+    const buf = await downloadTelegramPhoto(bot, largestPhoto.file_id);
+    if (buf) {
+      if (providerSupportsNativeVision()) {
+        attachedImage = {
+          base64: buf.toString('base64'),
+          mimeType: 'image/jpeg',
+        };
+        text = text.trim() || 'What do you see in this image?';
+      } else if (hasFallbackVision()) {
+        const result = await analyzeImage(buf, 'image/jpeg');
+        const analysis = result.ok
+          ? result.description
+          : `(Vision analysis failed: ${result.description})`;
+        const caption = (msg.caption ?? '').trim();
+        text =
+          `[User sent an image]\n\nVision analysis:\n${analysis}\n\n` +
+          (caption ? `User caption: "${caption}"` : 'User did not add a caption. Respond to what you see in the image.');
+      }
+    }
+  }
+
+  if (!text.trim()) {
+    if (msg.photo && !providerSupportsNativeVision() && !hasFallbackVision()) {
+      await safeSendMessage(
+        bot,
+        chatId,
+        'Image received. To analyze images, use /model gemini or /model nvidia (vision-capable), or configure GEMINI_API_KEY / OLLAMA_BASE_URL with a vision model.',
+        { reply_to_message_id: msg.message_id }
+      );
+    }
     return;
   }
 
@@ -135,8 +199,9 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
     }
 
     try {
-      response = await assistant.handleTextWithTrace(chatId, text, {
+      response = await assistant.handleTextWithTrace(sessionId, text, {
         onProgress: buildOnProgress(),
+        ...(attachedImage && { attachedImage }),
       });
     } finally {
       clearInterval(typingInterval);
@@ -151,7 +216,7 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
     await dismissProgressMessage();
     logger.error({ err: error }, 'Failed to process Telegram message');
     if (!response) {
-      response = assistant.recoverFromExternalProcessingError(chatId, text, error);
+      response = assistant.recoverFromExternalProcessingError(sessionId, text, error);
     } else {
       response = {
         reply:
@@ -190,8 +255,18 @@ export function startTelegramBot(): TelegramBot {
     });
   });
 
-  bot.on('polling_error', (error) => {
-    logger.error({ err: error }, 'Telegram polling error');
+  bot.on('polling_error', (error: Error & { code?: string }) => {
+    const is409 =
+      error?.code === 'ETELEGRAM' &&
+      String(error?.message ?? '').includes('409');
+    if (is409) {
+      logger.error(
+        { err: error },
+        'Telegram 409 Conflict: another instance is polling. Ensure only one maikBot runs (stop duplicates, wait ~30s after restart).'
+      );
+    } else {
+      logger.error({ err: error }, 'Telegram polling error');
+    }
   });
 
   logger.info('Telegram bot started in long polling mode');

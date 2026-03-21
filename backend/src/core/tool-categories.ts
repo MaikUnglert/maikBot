@@ -159,18 +159,68 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   },
   {
     id: 'shell',
-    label: 'Shell',
-    description: 'Run shell commands on the bot server (system info, files, network)',
-    tools: ['shell_exec'],
+    label: 'Shell & Files',
+    description: 'Run shell commands: file read/write/edit, system info, network. Use async=true for long-running commands.',
+    tools: ['shell_exec', 'shell_job_result'],
   },
   {
-    id: 'memory',
-    label: 'Persistent memory',
+    id: 'browser',
+    label: 'Browser',
+    description: 'Web browsing: navigate, snapshot, screenshot, screenshot_analyze (vision AI), click, type. Enable with BROWSER_ENABLED=true.',
+    tools: ['browser_navigate', 'browser_snapshot', 'browser_screenshot', 'browser_screenshot_analyze', 'browser_click', 'browser_type', 'browser_close'],
+  },
+  {
+    id: 'vision',
+    label: 'Vision',
+    description: 'Analyze images (e.g. photos sent by user). Use vision_analyze_image with file path.',
+    tools: ['vision_analyze_image'],
+  },
+  {
+    id: 'schedule',
+    label: 'Reminders & scheduled tasks',
     description:
-      'Read/append/patch Markdown notes per domain (e.g. home_assistant: user nicknames → entity_id). Not loaded into context until memory_read is called.',
-    tools: ['memory_read', 'memory_append', 'memory_str_replace'],
+      'Schedule one-time reminders ("remind me in 1 hour") and daily recurring tasks ("weather every morning at 10").',
+    tools: ['schedule_reminder', 'schedule_daily', 'schedule_weekly', 'schedule_list', 'schedule_cancel'],
+  },
+  {
+    id: 'gemini_cli',
+    label: 'Gemini CLI delegation',
+    description:
+      'Delegate larger coding tasks to Gemini CLI (runs in background, auto-approves). For multi-file refactors, complex features.',
+    tools: ['gemini_cli_delegate', 'gemini_cli_status'],
+  },
+  {
+    id: 'agent',
+    label: 'Agent self-configuration',
+    description: 'Read or change agent config (LLM provider, model) at runtime.',
+    tools: ['agent_config_get', 'agent_config_set'],
   },
 ];
+
+/** HA categories that are loaded on demand via triage (not in base). */
+export const TRIAGE_HA_CATEGORY_IDS = [
+  'automation',
+  'config',
+  'dashboard',
+  'history',
+  'calendar',
+  'system',
+  'hacs',
+] as const;
+
+/** Tools always loaded (no triage). Includes: shell, browser, vision, schedule, gemini_cli, agent, HA search + control. */
+export function getAlwaysLoadedToolNames(): Set<string> {
+  const tools = new Set<string>();
+  for (const id of ['shell', 'browser', 'vision', 'schedule', 'gemini_cli', 'agent']) {
+    const cat = TOOL_CATEGORIES.find((c) => c.id === id);
+    if (cat) for (const t of cat.tools) tools.add(t);
+  }
+  for (const id of ['search', 'control']) {
+    const cat = TOOL_CATEGORIES.find((c) => c.id === id);
+    if (cat) for (const t of cat.tools) tools.add(t);
+  }
+  return tools;
+}
 
 export function getCategoryIds(): string[] {
   return TOOL_CATEGORIES.map((c) => c.id);
@@ -191,4 +241,14 @@ export function buildCategoryListForPrompt(): string {
   return TOOL_CATEGORIES.map(
     (c) => `- "${c.id}": ${c.description}`
   ).join('\n');
+}
+
+/** Category list for triage: only on-demand HA categories. Base tools are always loaded. */
+export function buildTriageCategoryListForPrompt(): string {
+  return TRIAGE_HA_CATEGORY_IDS.map((id) => {
+    const cat = TOOL_CATEGORIES.find((c) => c.id === id);
+    return cat ? `- "${cat.id}": ${cat.description}` : null;
+  })
+    .filter(Boolean)
+    .join('\n');
 }

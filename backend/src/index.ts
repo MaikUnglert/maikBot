@@ -1,7 +1,13 @@
 import { startTelegramBot } from './services/telegram-bot.service.js';
+import { startWhatsAppBot } from './services/whatsapp-bot.service.js';
+import { startHeartbeat } from './services/heartbeat.service.js';
+import { setChannelSenderDeps } from './services/channel-sender.service.js';
 import { logger } from './logger.js';
 import { llmService } from './services/llm.service.js';
 import { config } from './config.js';
+import { acquireSingleInstanceLock } from './single-instance-lock.js';
+
+acquireSingleInstanceLock();
 
 async function bootstrap(): Promise<void> {
   logger.info('Bootstrapping maikBot backend');
@@ -35,7 +41,25 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  startTelegramBot();
+  const telegramBot = startTelegramBot();
+
+  let whatsAppSend: ((jid: string, text: string) => Promise<boolean>) | undefined;
+  if (config.whatsappEnabled) {
+    const wa = await startWhatsAppBot();
+    if (wa) {
+      whatsAppSend = wa.sendMessage;
+      logger.info('WhatsApp channel started');
+    } else {
+      logger.warn('WhatsApp enabled but failed to start');
+    }
+  }
+
+  setChannelSenderDeps({
+    telegramBot,
+    sendWhatsApp: whatsAppSend,
+  });
+
+  startHeartbeat();
 }
 
 bootstrap().catch((error) => {

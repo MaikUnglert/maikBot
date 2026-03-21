@@ -1,6 +1,8 @@
 export interface LlmMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /** Optional image for user messages. When set, the provider sends it natively (multimodal). */
+  imageAttachment?: { base64: string; mimeType: string };
   toolCalls?: ToolCall[];
   toolName?: string;
   /** OpenAI-style tool round-trip (required when multiple tools run in one turn) */

@@ -6,6 +6,7 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
 interface GeminiPart {
   text?: string;
+  inlineData?: { mimeType: string; data: string };
   thoughtSignature?: string;
   functionCall?: { name: string; args: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
@@ -39,9 +40,20 @@ function toGeminiContents(messages: LlmMessage[]): {
         systemInstruction = { parts: [{ text: msg.content }] };
         break;
 
-      case 'user':
-        contents.push({ role: 'user', parts: [{ text: msg.content }] });
+      case 'user': {
+        const parts: GeminiPart[] = [];
+        if (msg.imageAttachment) {
+          parts.push({
+            inlineData: {
+              mimeType: msg.imageAttachment.mimeType,
+              data: msg.imageAttachment.base64,
+            },
+          });
+        }
+        parts.push({ text: msg.content || 'What do you see in this image?' });
+        contents.push({ role: 'user', parts });
         break;
+      }
 
       case 'assistant': {
         const parts: GeminiPart[] = [];

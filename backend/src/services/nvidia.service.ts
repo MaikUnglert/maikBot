@@ -52,9 +52,21 @@ function toOpenAIMessages(messages: LlmMessage[]): Record<string, unknown>[] {
                 result.push({ role: 'system', content: msg.content });
                 break;
 
-            case 'user':
-                result.push({ role: 'user', content: msg.content });
+            case 'user': {
+                const content = msg.imageAttachment
+                    ? [
+                        { type: 'text' as const, text: msg.content || 'What do you see in this image?' },
+                        {
+                            type: 'image_url' as const,
+                            image_url: {
+                                url: `data:${msg.imageAttachment.mimeType};base64,${msg.imageAttachment.base64}`,
+                            },
+                        },
+                    ]
+                    : msg.content;
+                result.push({ role: 'user', content });
                 break;
+            }
 
             case 'assistant': {
                 const entry: Record<string, unknown> = {
