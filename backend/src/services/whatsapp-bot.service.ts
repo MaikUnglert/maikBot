@@ -171,9 +171,9 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
       }
     });
 
-    sock.ev.on('creds.update', (update) => {
-      saveCreds(update);
-      const me = update as { me?: { id?: string; lid?: string } };
+    sock.ev.on('creds.update', (upd) => {
+      void saveCreds();
+      const me = upd as { me?: { id?: string; lid?: string } };
       if (me.me?.id) myJid = me.me.id;
       if (me.me?.lid) myLid = me.me.lid;
     });
@@ -195,8 +195,8 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
         if (!remoteJid) continue;
         const isSelfChat =
           fromMe &&
-          (areJidsSameUser(remoteJid, myJid) ||
-            (!!myLid && areJidsSameUser(remoteJid, myLid)));
+          (areJidsSameUser(remoteJid, myJid ?? '') ||
+            (!!myLid && areJidsSameUser(remoteJid, myLid ?? '')));
 
         if (config.whatsappSelfOnly) {
           if (!isSelfChat) {
