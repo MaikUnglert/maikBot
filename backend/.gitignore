@@ -18,6 +18,10 @@ data/jobs/*
 data/shell-jobs/*
 !data/shell-jobs/.gitkeep
 
+# Scan temp files (PDFs, page images)
+data/scan/*
+!data/scan/.gitkeep
+
 # WhatsApp Baileys auth (session credentials)
 data/whatsapp-auth/
 

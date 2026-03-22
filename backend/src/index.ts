@@ -1,6 +1,7 @@
 import { startTelegramBot } from './services/telegram-bot.service.js';
 import { startWhatsAppBot } from './services/whatsapp-bot.service.js';
 import { startHeartbeat } from './services/heartbeat.service.js';
+import { startPaperlessWebhookServer } from './services/paperless-webhook.server.js';
 import { setChannelSenderDeps } from './services/channel-sender.service.js';
 import { logger } from './logger.js';
 import { llmService } from './services/llm.service.js';
@@ -60,6 +61,7 @@ async function bootstrap(): Promise<void> {
   });
 
   startHeartbeat();
+  startPaperlessWebhookServer();
 }
 
 bootstrap().catch((error) => {

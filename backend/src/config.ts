@@ -85,6 +85,26 @@ const envSchema = z.object({
   /** Only process "Message to yourself" (self-chat); ignore all other senders. Default false. */
   WHATSAPP_SELF_ONLY: booleanString.default('false'),
 
+  /** Paperless-ngx: URL (e.g. http://paperless:8000). Enables document classification webhook. */
+  PAPERLESS_URL: z.string().url().optional(),
+  /** Paperless-ngx: API token for authentication. */
+  PAPERLESS_TOKEN: z.string().optional(),
+  /** Paperless classifier: restrict to existing tags/correspondents/doc types (no auto-create). Default false. */
+  PAPERLESS_RESTRICT_TO_EXISTING: booleanString.default('false'),
+  /** Paperless webhook: port for HTTP server. Default 3080. */
+  PAPERLESS_CLASSIFY_PORT: z.coerce.number().int().min(1).max(65535).default(3080),
+  /** Paperless webhook: optional secret for Authorization: Bearer <secret>. */
+  PAPERLESS_CLASSIFY_WEBHOOK_SECRET: z.string().optional(),
+
+  /** Scan: backend. "hp-webscan" (HP printer WebScan), "scanimage" (SANE), or "none". */
+  SCAN_BACKEND: z.enum(['hp-webscan', 'scanimage', 'none']).default('none'),
+  /** Scan: HP printer IP for hp-webscan (WebScan must be enabled in printer EWS). */
+  SCAN_HP_PRINTER_IP: z.string().optional(),
+  /** Scan: SANE device string for scanimage (e.g. "hpaio:/net/HP_..."). Optional. */
+  SCAN_SANE_DEVICE: z.string().optional(),
+  /** Scan: temp directory. Default: data/scan */
+  SCAN_DATA_DIR: z.string().optional(),
+
   /** Browser automation: enable Playwright-based web browsing. Default false. */
   BROWSER_ENABLED: booleanString.default('false'),
   /** Run browser headless (no visible window). Default true. */
@@ -233,6 +253,12 @@ function resolveWhatsAppAuthDir(raw: string | undefined): string {
   return path.resolve(process.cwd(), 'data', 'whatsapp-auth');
 }
 
+function resolveScanDataDir(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return path.resolve(process.cwd(), 'data', 'scan');
+}
+
 function parseWhatsAppAllowedFrom(raw: string): Set<string> {
   const entries = raw.split(',').map((e) => e.trim()).filter(Boolean);
   return new Set(entries);
@@ -295,4 +321,17 @@ export const config = {
   browserEnabled: env.BROWSER_ENABLED,
   browserHeadless: env.BROWSER_HEADLESS,
   browserTimeoutMs: env.BROWSER_TIMEOUT_MS,
+
+  paperlessUrl: env.PAPERLESS_URL ? env.PAPERLESS_URL.replace(/\/$/, '') : undefined,
+  paperlessToken: env.PAPERLESS_TOKEN,
+  paperlessRestrictToExistingTags: env.PAPERLESS_RESTRICT_TO_EXISTING,
+  paperlessRestrictToExistingCorrespondents: env.PAPERLESS_RESTRICT_TO_EXISTING,
+  paperlessRestrictToExistingDocTypes: env.PAPERLESS_RESTRICT_TO_EXISTING,
+  paperlessClassifyPort: env.PAPERLESS_CLASSIFY_PORT,
+  paperlessClassifyWebhookSecret: env.PAPERLESS_CLASSIFY_WEBHOOK_SECRET?.trim() || undefined,
+
+  scanBackend: env.SCAN_BACKEND,
+  scanHpPrinterIp: env.SCAN_HP_PRINTER_IP?.trim(),
+  scanSaneDevice: env.SCAN_SANE_DEVICE?.trim(),
+  scanDataDir: resolveScanDataDir(env.SCAN_DATA_DIR),
 };

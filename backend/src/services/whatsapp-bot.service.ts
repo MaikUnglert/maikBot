@@ -3,11 +3,17 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   areJidsSameUser,
+  downloadMediaMessage,
+  getContentType,
   type WASocket,
   type proto,
   type WAMessage,
+  type WAMessageKey,
 } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import {
   assistant,
   type AssistantProgressCallback,
@@ -16,6 +22,15 @@ import {
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { sessionIdWhatsApp } from '../core/channel-types.js';
+import {
+  isScanEnabled,
+  startOrAddPage,
+  finishSession,
+  cancelSession,
+  setPendingConfirm,
+  handleConfirm,
+  getPendingConfirmByTarget,
+} from './scan.service.js';
 
 function extractText(msg: proto.IMessage): string | undefined {
   if (msg.conversation) return msg.conversation;
@@ -217,22 +232,221 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
           continue;
         }
 
+        const targetKey = `wa:${remoteJid}`;
+        const trimmedText = text.trim().toLowerCase();
+
+        const pendingConfirmId = getPendingConfirmByTarget(targetKey);
+        if (pendingConfirmId) {
+          const isJa = /^(ja|yes|senden|send|ok)$/i.test(trimmedText);
+          const isNein = /^(nein|no|verwerfen|discard|cancel)$/i.test(trimmedText);
+          if (isJa || isNein) {
+            const result = await handleConfirm(
+              pendingConfirmId,
+              isJa ? 'send' : 'discard'
+            );
+            if (result.ok) {
+              if (isJa) {
+                const base = config.paperlessUrl?.replace(/\/$/, '').replace(/\/api\/?$/, '') ?? '';
+                const link = result.documentId && base ? `\n${base}/documents/${result.documentId}` : '';
+                await sendMessage(
+                  remoteJid,
+                  `✓ An Paperless gesendet.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`
+                );
+              } else if (isNein) {
+                await sendMessage(remoteJid, 'Verworfen.');
+              }
+            } else {
+              await sendMessage(remoteJid, `Fehler: ${result.error ?? 'Unbekannt'}`);
+            }
+            continue;
+          }
+        }
+
+        // PDF document upload to Paperless
+        const contentType = getContentType(msg.message ?? {});
+        if (
+          contentType === 'documentMessage' &&
+          config.paperlessUrl &&
+          config.paperlessToken &&
+          sock
+        ) {
+          const doc = msg.message?.documentMessage;
+          const isPdf =
+            doc?.mimetype === 'application/pdf' ||
+            (doc?.fileName ?? '').toLowerCase().endsWith('.pdf');
+          if (isPdf && doc) {
+            try {
+              const buf = await downloadMediaMessage(
+                msg,
+                'buffer',
+                {},
+                { logger, reuploadRequest: sock.updateMediaMessage }
+              );
+              if (buf && Buffer.isBuffer(buf)) {
+                const dir = config.scanDataDir;
+                await fs.mkdir(dir, { recursive: true });
+                const filename = doc.fileName ?? 'document.pdf';
+                const tempPath = path.join(dir, `upload_${randomUUID()}.pdf`);
+                await fs.writeFile(tempPath, buf);
+
+                const confirmId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+                setPendingConfirm(confirmId, 'upload', targetKey, tempPath);
+
+                await sendMessage(
+                  remoteJid,
+                  `PDF erhalten (${filename}). Antworte mit "ja" um zu Paperless zu senden, "nein" zum Verwerfen.`
+                );
+              } else {
+                await sendMessage(remoteJid, 'PDF konnte nicht heruntergeladen werden.');
+              }
+            } catch (err) {
+              logger.error({ err }, 'WhatsApp: failed to download document');
+              await sendMessage(remoteJid, 'Fehler beim Herunterladen der PDF.');
+            }
+            continue;
+          }
+        }
+
+        if (!text?.trim()) {
+          logger.debug('WhatsApp: skipped (no text)');
+          continue;
+        }
+
+        if (trimmedText.startsWith('/scan')) {
+          const arg = trimmedText.replace(/^\/scan\s*/, '').trim();
+          if (!isScanEnabled()) {
+            await sendMessage(
+              remoteJid,
+              'Scan nicht konfiguriert. Setze SCAN_BACKEND und SCAN_SANE_DEVICE.'
+            );
+            continue;
+          }
+          if (arg === 'cancel' || arg === 'abbrechen') {
+            const result = cancelSession(targetKey);
+            await sendMessage(remoteJid, result.ok ? result.message! : result.message ?? 'Keine Session.');
+            continue;
+          }
+          if (arg === 'done' || arg === 'fertig') {
+            const finishResult = await finishSession(targetKey);
+            if (!finishResult.ok) {
+              await sendMessage(remoteJid, finishResult.error ?? 'Fehler.');
+              continue;
+            }
+            if (!finishResult.pdfPath) {
+              await sendMessage(remoteJid, 'Kein PDF erstellt.');
+              continue;
+            }
+            try {
+              const pdfBuf = await fs.readFile(finishResult.pdfPath);
+              if (sock) {
+                await sock.sendMessage(remoteJid, {
+                  document: pdfBuf,
+                  mimetype: 'application/pdf',
+                  fileName: `scan_${finishResult.sessionId ?? 'doc'}.pdf`,
+                });
+              } else {
+                await sendMessage(remoteJid, 'Verbindung unterbrochen. Bitte später erneut versuchen.');
+                continue;
+              }
+              const confirmId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+              setPendingConfirm(
+                confirmId,
+                finishResult.sessionId ?? confirmId,
+                targetKey,
+                finishResult.pdfPath
+              );
+              await sendMessage(
+                remoteJid,
+                `Vorschau (${finishResult.pageCount} Seite(n)). Antworte mit "ja" um zu Paperless zu senden, "nein" zum Verwerfen.`
+              );
+            } catch (err) {
+              logger.error({ err }, 'WhatsApp: failed to send scan preview');
+              await sendMessage(remoteJid, 'Vorschau konnte nicht gesendet werden.');
+            }
+            continue;
+          }
+          const addResult = await startOrAddPage(targetKey);
+          await sendMessage(
+            remoteJid,
+            addResult.ok ? addResult.message! : addResult.message ?? addResult.error ?? 'Scan fehlgeschlagen.'
+          );
+          continue;
+        }
+
         logger.info({ remoteJid, text: text.slice(0, 50) }, 'WhatsApp: processing message');
 
         const sessionId = sessionIdWhatsApp(remoteJid);
 
+        const PROGRESS_EDIT_THROTTLE_MS = 900;
+        let progressMessageKey: WAMessageKey | undefined;
+        let lastProgressEditAt = -Number.MAX_VALUE;
+
+        const replaceProgressWithReply = async (text: string): Promise<void> => {
+          if (!sock) return;
+          if (progressMessageKey) {
+            const key = progressMessageKey;
+            progressMessageKey = undefined;
+            try {
+              await sock.sendMessage(key.remoteJid!, {
+                text: text.slice(0, 4000),
+                edit: key,
+              });
+              return;
+            } catch {
+              /* edit failed, fall through to send new message */
+            }
+          }
+          await sendMessage(remoteJid, text);
+        };
+
         const buildOnProgress = (): AssistantProgressCallback => {
-          return async () => {
-            /* WhatsApp has no typing/status overlay like Telegram; could add reaction later */
+          return async (phase: string) => {
+            if (!progressMessageKey || !sock) return;
+            const now = Date.now();
+            if (now - lastProgressEditAt < PROGRESS_EDIT_THROTTLE_MS) return;
+            lastProgressEditAt = now;
+            try {
+              await sock.sendMessage(remoteJid, {
+                text: `⏳ ${phase}`,
+                edit: progressMessageKey,
+              });
+            } catch {
+              /* e.g. message not modified */
+            }
           };
         };
+
+        const presenceInterval =
+          sock && remoteJid
+            ? setInterval(() => {
+                sock?.sendPresenceUpdate('composing', remoteJid).catch(() => {});
+              }, 8000)
+            : undefined;
+
+        if (sock) {
+          try {
+            const statusSent = await sock.sendMessage(remoteJid, { text: '⏳ Working…' });
+            if (statusSent?.key) {
+              progressMessageKey = statusSent.key;
+              if (statusSent.key.id) {
+                sentMessageIds.add(statusSent.key.id);
+                if (sentMessageIds.size > MAX_SENT_IDS) {
+                  const first = sentMessageIds.values().next().value;
+                  if (first) sentMessageIds.delete(first);
+                }
+              }
+            }
+          } catch (err) {
+            logger.warn({ err }, 'WhatsApp: could not send progress status message');
+          }
+        }
 
         try {
           const response = await assistant.handleTextWithTrace(sessionId, text.trim(), {
             onProgress: buildOnProgress(),
           });
           const formatted = formatAssistantReplyForWhatsApp(response);
-          await sendMessage(remoteJid, formatted);
+          await replaceProgressWithReply(formatted);
         } catch (error) {
           logger.error({ err: error, sessionId }, 'WhatsApp: failed to process message');
           const fallback = assistant.recoverFromExternalProcessingError(
@@ -240,7 +454,10 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
             text.trim(),
             error
           );
-          await sendMessage(remoteJid, formatAssistantReplyForWhatsApp(fallback));
+          await replaceProgressWithReply(formatAssistantReplyForWhatsApp(fallback));
+        } finally {
+          if (presenceInterval) clearInterval(presenceInterval);
+          sock?.sendPresenceUpdate('paused', remoteJid).catch(() => {});
         }
       }
     });

@@ -301,6 +301,21 @@ export class Assistant {
       };
     }
 
+    if (trimmed === '/info' || trimmed === '/help' || trimmed === '/commands') {
+      trace.push('action: info');
+      return {
+        reply: `**Commands**
+
+/clear – Clear chat history
+/model – Switch LLM (ollama / gemini / nvidia). Example: /model nvidia
+/status – Show session status (model, message count, tokens)
+/scan – Scan document (HP WebScan or SANE). /scan done, /scan cancel. PDF hochladen → zu Paperless senden.
+/mcp tools – List MCP tools (e.g. Home Assistant)
+/info – This help`,
+        trace,
+      };
+    }
+
     if (trimmed.startsWith('/mcp ')) {
       const instruction = trimmed.replace(/^\/mcp\s+/i, '').trim();
       if (instruction === 'tools' || instruction === 'help') {

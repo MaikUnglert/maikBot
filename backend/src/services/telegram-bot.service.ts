@@ -1,4 +1,7 @@
-import TelegramBot, { Message } from 'node-telegram-bot-api';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import TelegramBot, { CallbackQuery, Message } from 'node-telegram-bot-api';
 import {
   assistant,
   type AssistantProgressCallback,
@@ -9,6 +12,15 @@ import { logger } from '../logger.js';
 import { sessionIdTelegram } from '../core/channel-types.js';
 import { llmService } from './llm.service.js';
 import { analyzeImage } from './vision.service.js';
+import {
+  isScanEnabled,
+  startOrAddPage,
+  finishSession,
+  cancelSession,
+  setPendingConfirm,
+  handleConfirm,
+  getPendingConfirmByTarget,
+} from './scan.service.js';
 
 /** Escape for Telegram HTML parse mode, then turn **bold** into <b>…</b>. */
 function formatReplyForTelegramHtml(text: string): string {
@@ -32,8 +44,9 @@ const PROGRESS_EDIT_THROTTLE_MS = 900;
 /** Status overlay only for turns that may hit the LLM (not instant slash commands). */
 function shouldShowProgressOverlay(text: string): boolean {
   const t = text.trim();
-  if (t === '/clear' || t === '/status') return false;
+  if (t === '/clear' || t === '/status' || t === '/info' || t === '/help' || t === '/commands') return false;
   if (t.startsWith('/model')) return false;
+  if (t.startsWith('/scan')) return false;
   return true;
 }
 
@@ -86,6 +99,71 @@ async function downloadTelegramPhoto(bot: TelegramBot, fileId: string): Promise<
   }
 }
 
+async function downloadTelegramDocument(bot: TelegramBot, fileId: string): Promise<Buffer | null> {
+  try {
+    const file = await bot.getFile(fileId);
+    if (!file.file_path) {
+      logger.warn('Telegram getFile returned no file_path');
+      return null;
+    }
+    const url = `https://api.telegram.org/file/bot${config.telegramBotToken}/${file.file_path}`;
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (err) {
+    logger.warn({ err, fileId }, 'Failed to download Telegram document');
+    return null;
+  }
+}
+
+async function handleDocumentUpload(bot: TelegramBot, msg: Message): Promise<boolean> {
+  const doc = msg.document;
+  if (!doc || !config.paperlessUrl || !config.paperlessToken) return false;
+
+  const isPdf =
+    doc.mime_type === 'application/pdf' || (doc.file_name ?? '').toLowerCase().endsWith('.pdf');
+  if (!isPdf) return false;
+
+  const chatId = msg.chat.id;
+  const targetKey = `tg:${chatId}`;
+
+  await bot.sendChatAction(chatId, 'typing');
+  const buf = await downloadTelegramDocument(bot, doc.file_id);
+  if (!buf) {
+    await safeSendMessage(bot, chatId, 'PDF konnte nicht heruntergeladen werden.', {
+      reply_to_message_id: msg.message_id,
+    });
+    return true;
+  }
+
+  const dir = config.scanDataDir;
+  await fs.mkdir(dir, { recursive: true });
+  const filename = doc.file_name ?? 'document.pdf';
+  const tempPath = path.join(dir, `upload_${randomUUID()}.pdf`);
+  await fs.writeFile(tempPath, buf);
+
+  const confirmId = randomConfirmId();
+  setPendingConfirm(confirmId, 'upload', targetKey, tempPath);
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: '✓ Zu Paperless senden', callback_data: `scan_confirm_${confirmId}_send` },
+        { text: '✗ Verwerfen', callback_data: `scan_confirm_${confirmId}_discard` },
+      ],
+    ],
+  };
+
+  await safeSendMessage(
+    bot,
+    chatId,
+    `PDF erhalten (${filename}). Zu Paperless senden?`,
+    { reply_to_message_id: msg.message_id, reply_markup: keyboard }
+  );
+  return true;
+}
+
 function providerSupportsNativeVision(): boolean {
   const provider = llmService.getActiveProviderName();
   return provider === 'nvidia' || provider === 'gemini';
@@ -93,6 +171,102 @@ function providerSupportsNativeVision(): boolean {
 
 function hasFallbackVision(): boolean {
   return !!(config.geminiApiKey || config.ollamaBaseUrl);
+}
+
+async function handleScanCommand(
+  bot: TelegramBot,
+  msg: Message,
+  text: string
+): Promise<boolean> {
+  const chatId = msg.chat.id;
+  const userId = msg.from?.id;
+  const t = text.trim().toLowerCase();
+
+  if (!t.startsWith('/scan')) return false;
+  if (!isAllowedUser(userId)) return false;
+  if (!isScanEnabled()) {
+    await safeSendMessage(
+      bot,
+      chatId,
+      'Scan nicht konfiguriert. Setze SCAN_BACKEND (hp-webscan/scanimage) und SCAN_HP_PRINTER_IP oder nutze scanimage.',
+      { reply_to_message_id: msg.message_id }
+    );
+    return true;
+  }
+
+  const arg = t.replace(/^\/scan\s*/, '').trim();
+
+  const targetKey = `tg:${chatId}`;
+
+  if (arg === 'cancel' || arg === 'abbrechen') {
+    const result = cancelSession(targetKey);
+    await safeSendMessage(bot, chatId, result.ok ? result.message! : result.message ?? 'Keine Session.', {
+      reply_to_message_id: msg.message_id,
+    });
+    return true;
+  }
+
+  if (arg === 'done' || arg === 'fertig') {
+    await bot.sendChatAction(chatId, 'upload_document');
+    const finishResult = await finishSession(targetKey);
+    if (!finishResult.ok) {
+      await safeSendMessage(bot, chatId, finishResult.error ?? 'Fehler.', {
+        reply_to_message_id: msg.message_id,
+      });
+      return true;
+    }
+    if (!finishResult.pdfPath) {
+      await safeSendMessage(bot, chatId, 'Kein PDF erstellt.', {
+        reply_to_message_id: msg.message_id,
+      });
+      return true;
+    }
+    try {
+      const pdfBuf = await fs.readFile(finishResult.pdfPath);
+      const caption = `Vorschau (${finishResult.pageCount} Seite(n)). Zu Paperless senden?`;
+      const confirmId = randomConfirmId();
+      const keyboard = {
+        inline_keyboard: [
+          [
+            { text: '✓ Zu Paperless senden', callback_data: `scan_confirm_${confirmId}_send` },
+            { text: '✗ Verwerfen', callback_data: `scan_confirm_${confirmId}_discard` },
+          ],
+        ],
+      };
+      const sent = await bot.sendDocument(chatId, pdfBuf, {
+        caption,
+        reply_to_message_id: msg.message_id,
+        reply_markup: keyboard,
+      });
+      setPendingConfirm(
+        confirmId,
+        finishResult.sessionId ?? confirmId,
+        targetKey,
+        finishResult.pdfPath,
+        sent.message_id
+      );
+    } catch (err) {
+      logger.error({ err }, 'Failed to send scan preview');
+      await safeSendMessage(bot, chatId, 'Vorschau konnte nicht gesendet werden.', {
+        reply_to_message_id: msg.message_id,
+      });
+    }
+    return true;
+  }
+
+  // /scan or /scan <anything else> → add page
+  const addResult = await startOrAddPage(targetKey);
+  await safeSendMessage(
+    bot,
+    chatId,
+    addResult.ok ? addResult.message! : addResult.message ?? addResult.error ?? 'Scan fehlgeschlagen.',
+    { reply_to_message_id: msg.message_id }
+  );
+  return true;
+}
+
+function randomConfirmId(): string {
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
@@ -132,6 +306,45 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
     }
   }
 
+  const targetKey = `tg:${chatId}`;
+  const pendingConfirmId = getPendingConfirmByTarget(targetKey);
+  if (pendingConfirmId) {
+    const t = text.trim().toLowerCase();
+    const isJa = /^(ja|yes|senden|send|ok)$/i.test(t);
+    const isNein = /^(nein|no|verwerfen|discard|cancel)$/i.test(t);
+    if (isJa || isNein) {
+      const result = await handleConfirm(pendingConfirmId, isJa ? 'send' : 'discard');
+      if (result.ok) {
+        if (isJa) {
+          const base = config.paperlessUrl?.replace(/\/$/, '').replace(/\/api\/?$/, '') ?? '';
+          const link =
+            result.documentId && base ? `\n${base}/documents/${result.documentId}` : '';
+          await safeSendMessage(
+            bot,
+            chatId,
+            `✓ Dokument an Paperless gesendet.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`,
+            { reply_to_message_id: msg.message_id }
+          );
+        } else {
+          await safeSendMessage(bot, chatId, 'Verworfen.', {
+            reply_to_message_id: msg.message_id,
+          });
+        }
+      } else {
+        await safeSendMessage(bot, chatId, `Fehler: ${result.error ?? 'Unbekannt'}`, {
+          reply_to_message_id: msg.message_id,
+        });
+      }
+      return;
+    }
+  }
+
+  const docHandled = await handleDocumentUpload(bot, msg);
+  if (docHandled) return;
+
+  const scanHandled = await handleScanCommand(bot, msg, text);
+  if (scanHandled) return;
+
   if (!text.trim()) {
     if (msg.photo && !providerSupportsNativeVision() && !hasFallbackVision()) {
       await safeSendMessage(
@@ -149,15 +362,25 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
   /** Start negative so the first onProgress edit is never throttled. */
   let lastProgressEditAt = -Number.MAX_VALUE;
 
-  const dismissProgressMessage = async (): Promise<void> => {
-    if (progressMessageId === undefined) return;
-    const id = progressMessageId;
-    progressMessageId = undefined;
-    try {
-      await bot.deleteMessage(chatId, id);
-    } catch {
-      /* already removed or missing rights */
+  const replaceProgressWithReply = async (formatted: string): Promise<void> => {
+    if (progressMessageId !== undefined) {
+      const id = progressMessageId;
+      progressMessageId = undefined;
+      try {
+        await bot.editMessageText(formatted, {
+          chat_id: chatId,
+          message_id: id,
+          parse_mode: 'HTML',
+        });
+        return;
+      } catch {
+        /* edit failed, fall through to send new message */
+      }
     }
+    await safeSendMessage(bot, chatId, formatted, {
+      reply_to_message_id: msg.message_id,
+      parse_mode: 'HTML',
+    });
   };
 
   const buildOnProgress = (): AssistantProgressCallback => {
@@ -205,15 +428,10 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
       });
     } finally {
       clearInterval(typingInterval);
-      await dismissProgressMessage();
     }
 
-    await safeSendMessage(bot, chatId, formatAssistantReplyForTelegram(response), {
-      reply_to_message_id: msg.message_id,
-      parse_mode: 'HTML',
-    });
+    await replaceProgressWithReply(formatAssistantReplyForTelegram(response));
   } catch (error) {
-    await dismissProgressMessage();
     logger.error({ err: error }, 'Failed to process Telegram message');
     if (!response) {
       response = assistant.recoverFromExternalProcessingError(sessionId, text, error);
@@ -224,10 +442,7 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
         trace: [],
       };
     }
-    await safeSendMessage(bot, chatId, formatAssistantReplyForTelegram(response), {
-      reply_to_message_id: msg.message_id,
-      parse_mode: 'HTML',
-    });
+    await replaceProgressWithReply(formatAssistantReplyForTelegram(response));
   }
 }
 
@@ -243,11 +458,63 @@ export function startTelegramBot(): TelegramBot {
   });
 
   bot.setMyCommands([
-    { command: '/clear', description: 'Clear chat history' },
-    { command: '/model', description: 'Switch LLM provider (ollama/gemini/nvidia)' },
-    { command: '/status', description: 'Show session status' },
-    { command: '/mcp', description: 'List MCP tools (e.g. /mcp tools)' },
+    { command: 'info', description: 'List all commands' },
+    { command: 'clear', description: 'Clear chat history' },
+    { command: 'model', description: 'Switch LLM provider (ollama/gemini/nvidia)' },
+    { command: 'status', description: 'Show session status' },
+    { command: 'scan', description: 'Scan document, /scan done, /scan cancel' },
+    { command: 'mcp', description: 'List MCP tools (e.g. /mcp tools)' },
   ]).catch((err) => logger.error({ err }, 'Failed to set Telegram commands'));
+
+  bot.on('callback_query', async (query: CallbackQuery) => {
+    const data = query.data;
+    const chatId = query.message?.chat?.id;
+    const messageId = query.message?.message_id;
+    const userId = query.from?.id;
+
+    if (!data?.startsWith('scan_confirm_') || !chatId || messageId === undefined) return;
+    if (!isAllowedUser(userId)) {
+      await bot.answerCallbackQuery(query.id, { text: 'Access denied.' });
+      return;
+    }
+
+    const match = data.match(/^scan_confirm_(.+)_(send|discard)$/);
+    if (!match) return;
+    const [, confirmId, action] = match;
+
+    const result = await handleConfirm(confirmId, action as 'send' | 'discard');
+    await bot.answerCallbackQuery(query.id, {
+      text: result.ok
+        ? action === 'send'
+          ? 'An Paperless gesendet.'
+          : 'Verworfen.'
+        : result.error ?? 'Fehler.',
+    });
+
+    try {
+      await bot.editMessageReplyMarkup(
+        { inline_keyboard: [] },
+        { chat_id: chatId, message_id: messageId }
+      );
+    } catch {
+      /* ignore */
+    }
+
+    if (action === 'send' && result.ok) {
+      const base = config.paperlessUrl?.replace(/\/$/, '').replace(/\/api\/?$/, '') ?? '';
+      const link =
+        result.documentId && base ? `\n${base}/documents/${result.documentId}` : '';
+      await bot.sendMessage(
+        chatId,
+        `✓ Dokument an Paperless gesendet.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`,
+        { reply_to_message_id: messageId }
+      );
+    } else if (action === 'send' && !result.ok && result.error) {
+      await bot.sendMessage(chatId, `Fehler beim Hochladen: ${result.error}`, {
+        reply_to_message_id: messageId,
+      });
+    }
+  });
 
   bot.on('message', (msg) => {
     void handleMessage(bot, msg).catch((error) => {

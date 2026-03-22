@@ -154,8 +154,8 @@ export class NvidiaService implements LlmProvider {
             model: config.nvidiaModel,
             messages: openAIMessages,
             max_tokens: config.nvidiaMaxTokens,
-            temperature: 1.0,
-            top_p: 1.0,
+            temperature: 1,
+            top_p: 0.95,
             stream: false,
         };
 
