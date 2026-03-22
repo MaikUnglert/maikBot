@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { wakeHeartbeat } from './heartbeat-wake.js';
 import type { SessionId } from '../core/channel-types.js';
 
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed';
@@ -170,6 +171,7 @@ export const geminiCliService = {
             { jobId: id, sessionId, exitCode: code },
             'Gemini CLI job finished'
           );
+          wakeHeartbeat();
         } catch (err) {
           logger.error({ err, jobId: id }, 'Failed to persist job result');
         }
@@ -179,6 +181,7 @@ export const geminiCliService = {
     proc.unref();
 
     logger.info({ jobId: id, sessionId, task: task.slice(0, 60) }, 'Gemini CLI job started');
+    wakeHeartbeat();
     return id;
   },
 

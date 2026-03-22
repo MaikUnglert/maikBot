@@ -3,6 +3,7 @@ import path from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { randomUUID } from 'node:crypto';
+import { wakeHeartbeat } from './heartbeat-wake.js';
 import type { SessionId } from '../core/channel-types.js';
 
 export interface ScheduledTask {
@@ -124,6 +125,7 @@ export const taskSchedulerService = {
     tasks.push(task);
     await saveTasks(tasks);
     logger.info({ id, sessionId, runAt: task.runAt }, 'Scheduled one-time reminder');
+    wakeHeartbeat();
     return id;
   },
 
@@ -152,6 +154,7 @@ export const taskSchedulerService = {
     tasks.push(task);
     await saveTasks(tasks);
     logger.info({ id, sessionId, hour, minute, nextRun: task.runAt }, 'Scheduled daily task');
+    wakeHeartbeat();
     return id;
   },
 
@@ -201,6 +204,7 @@ export const taskSchedulerService = {
       { id, sessionId, dayOfWeek: dayNames[dayOfWeek], hour, minute, nextRun: task.runAt },
       'Scheduled weekly task'
     );
+    wakeHeartbeat();
     return id;
   },
 

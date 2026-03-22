@@ -5,6 +5,7 @@ import { geminiCliService } from './gemini-cli.service.js';
 import { assistant } from '../core/assistant.js';
 import { llmService } from './llm.service.js';
 import { sendToSession } from './channel-sender.service.js';
+import { registerHeartbeatWakeCallback } from './heartbeat-wake.js';
 import type { LlmMessage } from './llm.types.js';
 
 const GEMINI_CLI_REVIEW_PROMPT = `You are MaikBot. A Gemini CLI job just finished. Review the result and write a short message for the user in Telegram format.
@@ -57,8 +58,11 @@ Stats: +${linesAdded}/-${linesRemoved} lines.`,
   return (chatResult.content ?? 'Review completed.').trim();
 }
 
-/** Compute next heartbeat delay in ms. Adaptive: fast when work pending, slow when idle. */
-async function getNextDelayMs(hadWorkThisTick: boolean): Promise<number> {
+/**
+ * Compute next heartbeat delay in ms.
+ * Returns null when nothing is scheduled (tasks, Gemini jobs) – heartbeat will sleep until woken.
+ */
+async function getNextDelayMs(hadWorkThisTick: boolean): Promise<number | null> {
   const activeSec = config.heartbeatActiveIntervalSec;
   const idleSec = config.heartbeatIdleIntervalSec;
   const activeMs = activeSec * 1000;
@@ -83,24 +87,17 @@ async function getNextDelayMs(hadWorkThisTick: boolean): Promise<number> {
     return Math.min(Math.max(msUntilNextTask - wakeBeforeDue, activeMs), idleMs);
   }
 
-  return idleMs; // idle: no tasks, no running jobs
+  return null; // nothing scheduled: sleep until woken (task added or Gemini job started)
 }
 
 /**
- * Start the adaptive heartbeat loop. Checks for:
+ * Start the heartbeat loop. Checks for:
  * - Due scheduled tasks (reminders, daily, weekly jobs)
  * - Completed Gemini CLI jobs (review and notify)
- * Runs frequently (HEARTBEAT_ACTIVE_INTERVAL_SEC) when work is pending, slowly (HEARTBEAT_IDLE_INTERVAL_SEC) when idle.
+ * Only runs when work is pending (tasks or Gemini jobs). Sleeps when idle until woken
+ * by a new task or Gemini job.
  */
 export function startHeartbeat(): void {
-  const scheduleNext = (hadWork: boolean): void => {
-    getNextDelayMs(hadWork).then((delayMs) => {
-      setTimeout(() => {
-        void runTick().then(scheduleNext);
-      }, delayMs);
-    });
-  };
-
   const runTick = async (): Promise<boolean> => {
     try {
       let hadWork = false;
@@ -163,12 +160,28 @@ export function startHeartbeat(): void {
     }
   };
 
-  void runTick().then((hadWork) => scheduleNext(hadWork));
+  const scheduleNextOrSleep = (hadWork: boolean): void => {
+    void getNextDelayMs(hadWork).then((delayMs) => {
+      if (delayMs === null) {
+        logger.debug('Heartbeat: nothing scheduled, sleeping until woken');
+        return;
+      }
+      setTimeout(() => {
+        void runTick().then(scheduleNextOrSleep);
+      }, delayMs);
+    });
+  };
+
+  registerHeartbeatWakeCallback(() => {
+    void runTick().then(scheduleNextOrSleep);
+  });
+
+  void runTick().then(scheduleNextOrSleep);
   logger.info(
     {
       activeSec: config.heartbeatActiveIntervalSec,
       idleSec: config.heartbeatIdleIntervalSec,
     },
-    'Heartbeat started (adaptive: fast when busy, slow when idle)'
+    'Heartbeat started (runs only when tasks or Gemini CLI jobs are scheduled)'
   );
 }
