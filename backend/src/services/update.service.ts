@@ -1,9 +1,10 @@
 /**
  * Self-update: git pull, npm install, npm run build, then exit.
  * Local reload: build only, then exit (for Gemini CLI self-improvements).
- * Expects a process manager (systemd, PM2, Docker) to restart.
+ * When run under systemd/PM2/Docker: exits and lets the process manager restart.
+ * When run manually (npm run start): spawns a new process before exiting.
  */
-import { execSync } from 'node:child_process';
+import { execSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { logger } from '../logger.js';
@@ -47,6 +48,17 @@ export async function performUpdate(mode: UpdateMode = 'full'): Promise<{ ok: bo
     logs.push('npm run build ok');
 
     logger.info('Self-update complete, exiting for restart');
+
+    // When under systemd/PM2/Docker, just exit – process manager restarts.
+    // When run manually, spawn a new process so the bot comes back.
+    if (!process.env.MAIKBOT_RESTART_BY && !process.env.INVOCATION_ID) {
+      const child = spawn('npm', ['run', 'start'], {
+        cwd: root,
+        detached: true,
+        stdio: 'inherit',
+      });
+      child.unref();
+    }
     process.exit(0);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

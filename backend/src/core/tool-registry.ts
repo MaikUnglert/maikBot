@@ -1,5 +1,6 @@
 import { mcpHostService } from '../services/mcp-host.service.js';
 import { executeShell, getShellJobResult } from './tools/shell.js';
+import { performUpdate } from '../services/update.service.js';
 import { getScheduleTools } from './tools/schedule-tools.js';
 import { getGeminiCliTools } from './tools/gemini-cli-tools.js';
 import { getAgentConfigTools } from './tools/agent-config-tools.js';
@@ -110,12 +111,39 @@ function getBuiltInTools(): RegisteredTool[] {
     },
   };
 
+  const maikbotSelfUpdate: RegisteredTool = {
+    definition: {
+      type: 'function',
+      function: {
+        name: 'maikbot_self_update',
+        description:
+          'Pull latest code, build, and restart maikBot. Use when the user asks to update the bot (e.g. "update dich", "aktualisiere dich", "pull latest"). The process will exit and restart automatically.',
+        parameters: {
+          type: 'object',
+          properties: {
+            mode: {
+              type: 'string',
+              enum: ['full', 'local'],
+              description:
+                'full: git pull, npm install, build, restart. local: build only, restart (e.g. after Gemini CLI changes).',
+            },
+          },
+        },
+      },
+    },
+    execute: async (args) => {
+      const mode = (args.mode === 'local' ? 'local' : 'full') as 'full' | 'local';
+      const result = await performUpdate(mode);
+      return result;
+    },
+  };
+
   const agentConfig = getAgentConfigTools().map((t) => ({
     definition: t.definition,
     execute: t.execute,
   }));
 
-  return [shell, shellJobResult, ...agentConfig];
+  return [shell, shellJobResult, maikbotSelfUpdate, ...agentConfig];
 }
 
 export class ToolRegistry {

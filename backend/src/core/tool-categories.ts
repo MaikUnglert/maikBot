@@ -161,7 +161,7 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     id: 'shell',
     label: 'Shell & Files',
     description: 'Run shell commands: file read/write/edit, system info, network. Use async=true for long-running commands.',
-    tools: ['shell_exec', 'shell_job_result'],
+    tools: ['shell_exec', 'shell_job_result', 'maikbot_self_update'],
   },
   {
     id: 'browser',
