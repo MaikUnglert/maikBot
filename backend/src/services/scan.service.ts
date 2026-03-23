@@ -231,7 +231,10 @@ export async function startOrAddPage(targetKey: ScanTargetKey): Promise<{
   message?: string;
 }> {
   if (!isScanEnabled()) {
-    return { ok: false, error: 'Scan nicht konfiguriert (SCAN_BACKEND, SCAN_HP_PRINTER_IP oder scanimage)' };
+    return {
+      ok: false,
+      error: 'Scan not configured (set SCAN_BACKEND, SCAN_HP_PRINTER_IP for hp-webscan, or scanimage/SANE)',
+    };
   }
 
   pruneExpired();
@@ -276,11 +279,11 @@ export async function startOrAddPage(targetKey: ScanTargetKey): Promise<{
     }
     return {
       ok: false,
-      error: 'Scan fehlgeschlagen',
+      error: 'Scan failed',
       message:
         config.scanBackend === 'hp-webscan'
-          ? 'WebScan fehlgeschlagen. Ist der Drucker erreichbar und WebScan aktiviert?'
-          : 'scanimage fehlgeschlagen. Ist SANE/scanimage installiert und der Scanner verbunden?',
+          ? 'WebScan failed. Is the printer reachable and WebScan enabled?'
+          : 'scanimage failed. Is SANE/scanimage installed and the scanner connected?',
     };
   }
 
@@ -290,8 +293,8 @@ export async function startOrAddPage(targetKey: ScanTargetKey): Promise<{
     pageCount: session.pages.length,
     message:
       session.pages.length === 1
-        ? 'Seite 1 gescannt. Nächste Seite scannen mit /scan oder fertig mit /scan done.'
-        : `${session.pages.length} Seiten. Weiter mit /scan oder /scan done.`,
+        ? 'Page 1 scanned. Scan another page with /scan or finish with /scan done.'
+        : `${session.pages.length} page(s). Continue with /scan or finish with /scan done.`,
   };
 }
 
@@ -305,7 +308,7 @@ export async function finishSession(targetKey: ScanTargetKey): Promise<{
   pruneExpired();
   const session = getSession(targetKey);
   if (!session || session.pages.length === 0) {
-    return { ok: false, error: 'Keine Scan-Session. Starte mit /scan.' };
+    return { ok: false, error: 'No scan session. Start with /scan.' };
   }
 
   const dir = await ensureScanDir();
@@ -319,7 +322,7 @@ export async function finishSession(targetKey: ScanTargetKey): Promise<{
   fs.rmdir(session.sessionDir).catch(() => {});
 
   if (!created) {
-    return { ok: false, error: 'PDF-Erstellung fehlgeschlagen' };
+    return { ok: false, error: 'PDF creation failed' };
   }
 
   return { ok: true, pdfPath, pageCount: session.pages.length, sessionId: session.id };
@@ -329,7 +332,7 @@ export function cancelSession(targetKey: ScanTargetKey): { ok: boolean; message?
   pruneExpired();
   const session = getSession(targetKey);
   if (!session) {
-    return { ok: false, message: 'Keine laufende Scan-Session.' };
+    return { ok: false, message: 'No active scan session.' };
   }
 
   sessions.delete(session.id);
@@ -337,7 +340,7 @@ export function cancelSession(targetKey: ScanTargetKey): { ok: boolean; message?
     fs.unlink(p).catch(() => {});
   }
   fs.rmdir(session.sessionDir).catch(() => {});
-  return { ok: true, message: 'Scan abgebrochen.' };
+  return { ok: true, message: 'Scan cancelled.' };
 }
 
 export function setPendingConfirm(
@@ -367,7 +370,7 @@ export async function handleConfirm(
 ): Promise<{ ok: boolean; pdfPath?: string; documentId?: number; error?: string }> {
   const pending = pendingConfirms.get(confirmId);
   if (!pending) {
-    return { ok: false, error: 'Bestätigung abgelaufen oder ungültig.' };
+    return { ok: false, error: 'Confirmation expired or invalid.' };
   }
   pendingConfirms.delete(confirmId);
   pendingByTarget.delete(pending.targetKey);
