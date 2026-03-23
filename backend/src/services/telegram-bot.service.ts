@@ -22,14 +22,10 @@ import {
   handleConfirm,
   getPendingConfirmByTarget,
 } from './scan.service.js';
+import { formatMarkdownForTelegram } from './markdown-formatter.js';
 
-/** Escape for Telegram HTML parse mode, then turn **bold** into <b>…</b>. */
 function formatReplyForTelegramHtml(text: string): string {
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  return escaped.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  return formatMarkdownForTelegram(text);
 }
 
 function formatAssistantReplyForTelegram(response: AssistantResponse): string {
@@ -420,8 +416,14 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
           parse_mode: 'HTML',
         });
         return;
-      } catch {
-        /* edit failed, fall through to send new message */
+      } catch (err) {
+        /* edit failed (e.g. invalid HTML, message too long) – delete progress msg to avoid duplicate */
+        logger.debug({ err, chatId, messageId: id }, 'Could not edit progress message, deleting before send');
+        try {
+          await bot.deleteMessage(chatId, id);
+        } catch {
+          /* ignore delete failure */
+        }
       }
     }
     await safeSendMessage(bot, chatId, formatted, {

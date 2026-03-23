@@ -4,15 +4,10 @@ import {
   parseSessionId,
   type SessionId,
 } from '../core/channel-types.js';
-
-/** Escape for Telegram HTML parse mode, then turn **bold** into <b>…</b>. */
-function formatForTelegramHtml(text: string): string {
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  return escaped.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
-}
+import {
+  formatMarkdownForTelegram,
+  formatMarkdownForWhatsApp,
+} from './markdown-formatter.js';
 
 export interface ChannelSenderDeps {
   telegramBot: TelegramBot | null;
@@ -53,7 +48,7 @@ export async function sendToSession(
     }
     try {
       const chatId = Number.parseInt(parsed.targetId, 10);
-      const formatted = formatForTelegramHtml(text).slice(0, 4096);
+      const formatted = formatMarkdownForTelegram(text).slice(0, 4096);
       await d.telegramBot.sendMessage(chatId, formatted, { parse_mode: 'HTML' });
       return true;
     } catch (error) {
@@ -79,7 +74,8 @@ export async function sendToSession(
       logger.error({ sessionId }, 'WhatsApp not available');
       return false;
     }
-    return d.sendWhatsApp(parsed.targetId, text.slice(0, 4000));
+    const formatted = formatMarkdownForWhatsApp(text).slice(0, 4000);
+    return d.sendWhatsApp(parsed.targetId, formatted);
   }
 
   return false;
