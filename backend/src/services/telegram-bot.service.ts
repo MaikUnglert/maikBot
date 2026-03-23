@@ -22,10 +22,14 @@ import {
   handleConfirm,
   getPendingConfirmByTarget,
 } from './scan.service.js';
-import { formatMarkdownForTelegram } from './markdown-formatter.js';
 
+/** Escape for Telegram HTML parse mode, then turn **bold** into <b>…</b>. */
 function formatReplyForTelegramHtml(text: string): string {
-  return formatMarkdownForTelegram(text);
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return escaped.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
 }
 
 function formatAssistantReplyForTelegram(response: AssistantResponse): string {
