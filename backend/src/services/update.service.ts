@@ -56,7 +56,9 @@ export async function performUpdate(mode: UpdateMode = 'full'): Promise<{ ok: bo
       fs.mkdirSync(path.join(root, 'data'), { recursive: true });
       const npmPath = execSync('which npm', { encoding: 'utf-8', env: { ...process.env, PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin' } }).trim();
       const cmd = `sleep 3 && cd ${JSON.stringify(root)} && ${JSON.stringify(npmPath)} run start >> ${JSON.stringify(logPath)} 2>&1`;
-      const child = spawn('sh', ['-c', cmd], {
+      // Use setsid so the child runs in a new session and survives when we exit (avoids SIGHUP).
+      const setsidPath = fs.existsSync('/usr/bin/setsid') ? '/usr/bin/setsid' : 'setsid';
+      const child = spawn(setsidPath, ['sh', '-c', cmd], {
         cwd: root,
         detached: true,
         stdio: 'ignore',
