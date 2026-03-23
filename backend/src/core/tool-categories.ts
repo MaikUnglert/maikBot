@@ -195,6 +195,12 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
     description: 'Read or change agent config (LLM provider, model) at runtime.',
     tools: ['agent_config_get', 'agent_config_set'],
   },
+  {
+    id: 'scan',
+    label: 'Document scan',
+    description: 'Trigger scanner/printer to scan a page. HP WebScan or SANE.',
+    tools: ['scan_add_page', 'scan_status', 'scan_cancel'],
+  },
 ];
 
 /** HA categories that are loaded on demand via triage (not in base). */
@@ -208,10 +214,10 @@ export const TRIAGE_HA_CATEGORY_IDS = [
   'hacs',
 ] as const;
 
-/** Tools always loaded (no triage). Includes: shell, browser, vision, schedule, gemini_cli, agent, HA search + control. */
+/** Tools always loaded (no triage). Includes: shell, browser, vision, schedule, gemini_cli, agent, scan (if enabled), HA search + control. */
 export function getAlwaysLoadedToolNames(): Set<string> {
   const tools = new Set<string>();
-  for (const id of ['shell', 'browser', 'vision', 'schedule', 'gemini_cli', 'agent']) {
+  for (const id of ['shell', 'browser', 'vision', 'schedule', 'gemini_cli', 'agent', 'scan']) {
     const cat = TOOL_CATEGORIES.find((c) => c.id === id);
     if (cat) for (const t of cat.tools) tools.add(t);
   }

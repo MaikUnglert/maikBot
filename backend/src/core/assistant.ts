@@ -133,7 +133,7 @@ Current date and time: ${timeStr}
 ${memorySection}${reposNote}
 
 Rules:
-1) Respond briefly and clearly in English unless the user explicitly asks for another language.
+1) Respond briefly and clearly in the users language unless the user explicitly asks for another language.
 2) You have access to tools (smart home, shell, browser, etc.). Use them when the user's request requires it.${browserNote}${visionNote}
 3) Do not invent tool results or device states. Only report what tools return.
 4) If a tool call fails with a name/match error, call ha_search_entities or ha_deep_search first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
@@ -146,7 +146,8 @@ Rules:
 11) For larger coding tasks (multi-file refactors, complex features), use gemini_cli_delegate. Do not use shell_exec for long-running gemini commands. When the user wants to iterate on a previous Gemini result (e.g. "change that to X", "fix the bug you introduced", "use approach Y instead"), use gemini_cli_delegate with continue_session=true so Gemini continues in the same session with full context.
 12) Self-update: When the user asks you to update yourself (e.g. "update dich", "aktualisiere dich", "pull latest code"), use shell_exec to run from the project root: git pull, then in backend: npm install, npm run build. Use async=true for long-running steps. After success, tell the user to use /update to restart with the new code, or to restart the bot manually. Alternatively they can use /update directly for a full update+restart.
 13) Self-improvement: When the user asks you to improve yourself, add a feature, or fix your own code, use gemini_cli_delegate. The task must instruct Gemini to: (1) create a feature branch (e.g. feature/self-improvement-YYYYMMDD-short-description), (2) make the changes, (3) commit, (4) push to origin, (5) open a PR with gh pr create. Never commit to main. After the user merges the PR, they run /update to pull and restart.
-14) External repos: When the user asks you to work on an external git repo, clone it into the git repos workspace (see above), then use gemini_cli_delegate with workspace pointing to the cloned folder.`;
+14) External repos: When the user asks you to work on an external git repo, clone it into the git repos workspace (see above), then use gemini_cli_delegate with workspace pointing to the cloned folder.
+15) Scan: When the user asks to scan at the printer (e.g. "scanne am Drucker", "scan document"), use scan_add_page. For more pages they can say "noch eine Seite" or "weiter"; for the PDF they say "fertig" or "done".`;
 }
 
 const TRIAGE_SYSTEM_PROMPT = `You are MaikBot. The agent ALWAYS has: shell, browser, vision, schedule, gemini_cli, agent config, and Home Assistant search + control (search entities, turn on/off, get state).
@@ -515,6 +516,9 @@ export class Assistant {
       schedule_cancel: 'Cancelling task…',
       agent_config_get: 'Reading config…',
       agent_config_set: 'Updating config…',
+      scan_add_page: 'Scanning at printer…',
+      scan_status: 'Checking scan status…',
+      scan_cancel: 'Cancelling scan…',
     };
     if (phases[toolName]) return phases[toolName];
     if (toolName.startsWith('ha_')) return 'Calling Home Assistant…';

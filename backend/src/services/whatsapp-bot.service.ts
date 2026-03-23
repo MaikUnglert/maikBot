@@ -27,6 +27,7 @@ import {
   startOrAddPage,
   finishSession,
   cancelSession,
+  getSession,
   setPendingConfirm,
   handleConfirm,
   getPendingConfirmByTarget,
@@ -370,6 +371,39 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
             remoteJid,
             addResult.ok ? addResult.message! : addResult.message ?? addResult.error ?? 'Scan fehlgeschlagen.'
           );
+          continue;
+        }
+
+        const t = trimmedText.toLowerCase();
+        if (
+          isScanEnabled() &&
+          getSession(targetKey) &&
+          (t === 'fertig' || t === 'done' || t === 'scan fertig' || t === 'scan done')
+        ) {
+          const finishResult = await finishSession(targetKey);
+          if (finishResult.ok && finishResult.pdfPath) {
+            try {
+              const pdfBuf = await fs.readFile(finishResult.pdfPath);
+              if (sock) {
+                await sock.sendMessage(remoteJid, {
+                  document: pdfBuf,
+                  mimetype: 'application/pdf',
+                  fileName: `scan_${finishResult.sessionId ?? 'doc'}.pdf`,
+                });
+              }
+              const confirmId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+              setPendingConfirm(confirmId, finishResult.sessionId ?? confirmId, targetKey, finishResult.pdfPath);
+              await sendMessage(
+                remoteJid,
+                `Vorschau (${finishResult.pageCount} Seite(n)). Antworte mit "ja" um zu Paperless zu senden, "nein" zum Verwerfen.`
+              );
+            } catch (err) {
+              logger.error({ err }, 'WhatsApp: failed to send scan preview');
+              await sendMessage(remoteJid, 'Vorschau konnte nicht gesendet werden.');
+            }
+          } else {
+            await sendMessage(remoteJid, finishResult.error ?? 'Kein PDF erstellt.');
+          }
           continue;
         }
 

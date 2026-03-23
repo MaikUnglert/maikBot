@@ -17,6 +17,7 @@ import {
   startOrAddPage,
   finishSession,
   cancelSession,
+  getSession,
   setPendingConfirm,
   handleConfirm,
   getPendingConfirmByTarget,
@@ -344,6 +345,52 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
 
   const scanHandled = await handleScanCommand(bot, msg, text);
   if (scanHandled) return;
+
+  const t = text.trim().toLowerCase();
+  if (
+    isScanEnabled() &&
+    getSession(targetKey) &&
+    (t === 'fertig' || t === 'done' || t === 'scan fertig' || t === 'scan done')
+  ) {
+    await bot.sendChatAction(chatId, 'upload_document');
+    const finishResult = await finishSession(targetKey);
+    if (finishResult.ok && finishResult.pdfPath) {
+      try {
+        const pdfBuf = await fs.readFile(finishResult.pdfPath);
+        const caption = `Vorschau (${finishResult.pageCount} Seite(n)). Zu Paperless senden?`;
+        const confirmId = randomConfirmId();
+        const sent = await bot.sendDocument(chatId, pdfBuf, {
+          caption,
+          reply_to_message_id: msg.message_id,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✓ Zu Paperless senden', callback_data: `scan_confirm_${confirmId}_send` },
+                { text: '✗ Verwerfen', callback_data: `scan_confirm_${confirmId}_discard` },
+              ],
+            ],
+          },
+        });
+        setPendingConfirm(
+          confirmId,
+          finishResult.sessionId ?? confirmId,
+          targetKey,
+          finishResult.pdfPath,
+          sent.message_id
+        );
+      } catch (err) {
+        logger.error({ err }, 'Failed to send scan preview');
+        await safeSendMessage(bot, chatId, 'Vorschau konnte nicht gesendet werden.', {
+          reply_to_message_id: msg.message_id,
+        });
+      }
+    } else {
+      await safeSendMessage(bot, chatId, finishResult.error ?? 'Kein PDF erstellt.', {
+        reply_to_message_id: msg.message_id,
+      });
+    }
+    return;
+  }
 
   if (!text.trim()) {
     if (msg.photo && !providerSupportsNativeVision() && !hasFallbackVision()) {

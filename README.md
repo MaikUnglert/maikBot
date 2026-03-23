@@ -70,6 +70,8 @@ See `backend/.env.example` for full options.
 - **/scan done** – fertig: PDF-Vorschau, dann Bestätigung
 - **/scan cancel** – Session abbrechen
 
+**Natürliche Sprache:** Du kannst auch schreiben „scanne am Drucker“ oder „scan document“ – der Bot startet den Scan. Für weitere Seiten: „noch eine Seite“ oder „weiter“. Zum Abschluss: „fertig“ oder „done“.
+
 **Telegram:** Vorschau mit Inline-Buttons „Zu Paperless senden“ / „Verwerfen“, oder „ja“/„nein“ tippen.  
 **WhatsApp:** Vorschau als Dokument, dann antworte mit „ja“ oder „nein“.
 

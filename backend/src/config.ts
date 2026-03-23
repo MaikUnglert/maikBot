@@ -66,7 +66,7 @@ const envSchema = z.object({
   /** Directory for cloning external git repos to work on. Must be under GEMINI_CLI_WORKSPACE_ROOT. Default: data/repos */
   GIT_REPOS_DIR: z.string().optional(),
 
-  /** Chat session max age in ms before pruning. Default: 24h (for long-running Gemini CLI jobs). */
+  /** Chat session max age in ms before pruning. Default: 24h. */
   CHAT_MAX_AGE_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
   /** Directory for persisted chat sessions (survives restart). Default: data/chat-sessions */
   CHAT_SESSIONS_DIR: z.string().optional(),
