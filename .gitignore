@@ -14,3 +14,6 @@ dist/
 
 # IDE / tool config with secrets
 .gemini/
+
+# Restart log (when running without systemd)
+data/restart.log

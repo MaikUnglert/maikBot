@@ -180,6 +180,12 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
     });
 
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      // Only process real-time new messages. Skip 'append'/'prepend' (history sync) –
+      // otherwise we'd reply to every old message when reconnecting.
+      if (type !== 'notify') {
+        logger.debug({ type, count: messages.length }, 'WhatsApp: skipped history sync');
+        return;
+      }
       for (const msg of messages) {
         if (msg.key?.id && sentMessageIds.has(msg.key.id)) {
           sentMessageIds.delete(msg.key.id);
