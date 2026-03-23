@@ -56,6 +56,8 @@ const envSchema = z.object({
   HEARTBEAT_IDLE_INTERVAL_SEC: z.coerce.number().int().positive().default(1800),
   /** Directory for scheduled tasks JSON. Default: <cwd>/data/scheduler */
   SCHEDULER_DATA_DIR: z.string().optional(),
+  /** Default timezone for scheduled daily/weekly tasks. Default: Europe/Berlin */
+  SCHEDULER_DEFAULT_TIMEZONE: z.string().default('Europe/Berlin'),
 
   /** Directory for Gemini CLI job state. Default: <cwd>/data/jobs */
   JOBS_DATA_DIR: z.string().optional(),
@@ -320,6 +322,7 @@ export const config = {
   heartbeatActiveIntervalSec: env.HEARTBEAT_ACTIVE_INTERVAL_SEC,
   heartbeatIdleIntervalSec: env.HEARTBEAT_IDLE_INTERVAL_SEC,
   schedulerDataDir: resolveSchedulerDataDir(env.SCHEDULER_DATA_DIR),
+  schedulerDefaultTimezone: env.SCHEDULER_DEFAULT_TIMEZONE,
   jobsDataDir: resolveJobsDataDir(env.JOBS_DATA_DIR),
   shellJobsDataDir: resolveShellJobsDataDir(env.SHELL_JOBS_DATA_DIR),
   geminiCliWorkspaceRoot: resolveGeminiCliWorkspace(env.GEMINI_CLI_WORKSPACE_ROOT),
