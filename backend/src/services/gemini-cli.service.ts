@@ -75,7 +75,8 @@ export const geminiCliService = {
     task: string,
     contextSnapshot: GeminiCliJob['contextSnapshot'],
     workspace?: string,
-    includeDirs?: string[]
+    includeDirs?: string[],
+    continueSession = false
   ): Promise<string> {
     const id = randomUUID();
     const resolvedWorkspace = resolveWorkspace(workspace);
@@ -99,13 +100,11 @@ export const geminiCliService = {
       'utf-8'
     );
 
-    const args: string[] = [
-      '-p',
-      task,
-      '--yolo',
-      '--output-format',
-      'json',
-    ];
+    const args: string[] = [];
+    if (continueSession) {
+      args.push('-r', 'latest');
+    }
+    args.push('-p', task, '--yolo', '--output-format', 'json');
     if (dirs.length > 0) {
       args.push('--include-directories', dirs.join(','));
     }

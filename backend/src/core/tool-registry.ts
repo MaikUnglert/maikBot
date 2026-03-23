@@ -5,6 +5,7 @@ import { getGeminiCliTools } from './tools/gemini-cli-tools.js';
 import { getAgentConfigTools } from './tools/agent-config-tools.js';
 import { getBrowserTools } from './tools/browser-tools.js';
 import { getVisionTools } from './tools/vision-tools.js';
+import { getScanTools } from './tools/scan-tools.js';
 import { logger } from '../logger.js';
 import type { ToolDefinition } from '../services/llm.types.js';
 
@@ -228,6 +229,18 @@ export class ToolRegistry {
     const needsVision = !allowedNames || [...visionToolNames].some((n) => allowedNames.has(n));
     if (needsVision) {
       for (const tool of getVisionTools()) {
+        const name = tool.definition.function.name;
+        if (allowedNames && !allowedNames.has(name)) continue;
+        definitions.push(tool.definition);
+        dispatch.set(name, tool.execute);
+      }
+    }
+
+    const scanToolNames = new Set<string>(['scan_add_page', 'scan_status', 'scan_cancel']);
+    const needsScan =
+      (!allowedNames || [...scanToolNames].some((n) => allowedNames.has(n))) && context?.sessionId;
+    if (needsScan && context) {
+      for (const tool of getScanTools(context.sessionId)) {
         const name = tool.definition.function.name;
         if (allowedNames && !allowedNames.has(name)) continue;
         definitions.push(tool.definition);

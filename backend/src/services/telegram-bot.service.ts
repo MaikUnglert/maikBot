@@ -17,6 +17,7 @@ import {
   startOrAddPage,
   finishSession,
   cancelSession,
+  getSession,
   setPendingConfirm,
   handleConfirm,
   getPendingConfirmByTarget,
@@ -44,7 +45,7 @@ const PROGRESS_EDIT_THROTTLE_MS = 900;
 /** Status overlay only for turns that may hit the LLM (not instant slash commands). */
 function shouldShowProgressOverlay(text: string): boolean {
   const t = text.trim();
-  if (t === '/clear' || t === '/status' || t === '/info' || t === '/help' || t === '/commands') return false;
+  if (t === '/clear' || t === '/status' || t === '/info' || t === '/help' || t === '/commands' || t === '/update' || t === '/reload') return false;
   if (t.startsWith('/model')) return false;
   if (t.startsWith('/scan')) return false;
   return true;
@@ -345,6 +346,52 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
   const scanHandled = await handleScanCommand(bot, msg, text);
   if (scanHandled) return;
 
+  const t = text.trim().toLowerCase();
+  if (
+    isScanEnabled() &&
+    getSession(targetKey) &&
+    (t === 'fertig' || t === 'done' || t === 'scan fertig' || t === 'scan done')
+  ) {
+    await bot.sendChatAction(chatId, 'upload_document');
+    const finishResult = await finishSession(targetKey);
+    if (finishResult.ok && finishResult.pdfPath) {
+      try {
+        const pdfBuf = await fs.readFile(finishResult.pdfPath);
+        const caption = `Vorschau (${finishResult.pageCount} Seite(n)). Zu Paperless senden?`;
+        const confirmId = randomConfirmId();
+        const sent = await bot.sendDocument(chatId, pdfBuf, {
+          caption,
+          reply_to_message_id: msg.message_id,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✓ Zu Paperless senden', callback_data: `scan_confirm_${confirmId}_send` },
+                { text: '✗ Verwerfen', callback_data: `scan_confirm_${confirmId}_discard` },
+              ],
+            ],
+          },
+        });
+        setPendingConfirm(
+          confirmId,
+          finishResult.sessionId ?? confirmId,
+          targetKey,
+          finishResult.pdfPath,
+          sent.message_id
+        );
+      } catch (err) {
+        logger.error({ err }, 'Failed to send scan preview');
+        await safeSendMessage(bot, chatId, 'Vorschau konnte nicht gesendet werden.', {
+          reply_to_message_id: msg.message_id,
+        });
+      }
+    } else {
+      await safeSendMessage(bot, chatId, finishResult.error ?? 'Kein PDF erstellt.', {
+        reply_to_message_id: msg.message_id,
+      });
+    }
+    return;
+  }
+
   if (!text.trim()) {
     if (msg.photo && !providerSupportsNativeVision() && !hasFallbackVision()) {
       await safeSendMessage(
@@ -461,6 +508,8 @@ export function startTelegramBot(): TelegramBot {
     { command: 'info', description: 'List all commands' },
     { command: 'clear', description: 'Clear chat history' },
     { command: 'model', description: 'Switch LLM provider (ollama/gemini/nvidia)' },
+    { command: 'update', description: 'Pull updates, build, restart' },
+    { command: 'reload', description: 'Build and restart (for self-improvements)' },
     { command: 'status', description: 'Show session status' },
     { command: 'scan', description: 'Scan document, /scan done, /scan cancel' },
     { command: 'mcp', description: 'List MCP tools (e.g. /mcp tools)' },

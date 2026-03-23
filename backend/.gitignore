@@ -25,5 +25,13 @@ data/scan/*
 # WhatsApp Baileys auth (session credentials)
 data/whatsapp-auth/
 
+# Persisted chat sessions (survives restart)
+data/chat-sessions/
+!data/chat-sessions/.gitkeep
+
+# Cloned external repos (git clone workspace)
+data/repos/
+!data/repos/.gitkeep
+
 # Single-instance lock (runtime, not committed)
 data/.maikbot.lock

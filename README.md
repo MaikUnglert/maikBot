@@ -11,15 +11,47 @@ cp .env.example .env   # fill TELEGRAM_BOT_TOKEN, ALLOWED_TELEGRAM_USER_IDS, GEM
 npm run dev
 ```
 
+## systemd (Debian/Ubuntu VM)
+
+For production with auto-restart (e.g. after `/update`):
+
+```bash
+sudo ./setup-systemd.sh --install
+sudo systemctl start maikbot
+```
+
+Without `--install` the script only shows the service file. Logs: `journalctl -u maikbot -f`
+
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `/model` | Show current LLM |
 | `/model gemini` \| `/model ollama` \| `/model nvidia` | Switch LLM |
+| `/update` | Pull updates, build, restart (needs systemd/PM2) |
+| `/reload` | Build and restart only (for Gemini CLI self-improvements, no git pull) |
 | `/clear` | Reset chat |
 | `/status` | Context stats |
 | `/mcp tools` | List MCP tools |
+| `/scan` | Scan document (see Scan → Paperless below) |
+
+## Self-update & Self-improvement
+
+Chat history is persisted to disk (`data/chat-sessions/`) and survives restarts.
+
+**Natural language:** Ask the bot to update itself (e.g. "update dich", "aktualisiere dich") – it uses `shell_exec` for git pull, build, then tells you to run `/update` or restart.
+
+**`/update`:** Full flow: persist chat, git pull, npm install, npm run build, exit. A process manager (systemd, PM2) restarts the bot.
+
+**`/reload`:** Build and restart only – for local changes from Gemini CLI (avoids git pull overwriting edits).
+
+**Self-improvement via Gemini CLI:** Ask the bot to improve itself (e.g. "verbessere dich: füge X hinzu"). It delegates to Gemini CLI with instructions to create a feature branch, make changes, commit, push, and open a PR. Never commits to main. After you merge the PR, run `/update`.
+
+**Iterations:** When you ask to change a previous Gemini result (e.g. "change that to X"), the bot uses `continue_session=true` to resume the same Gemini CLI session.
+
+## External repos (Git workspace)
+
+When you ask the bot to work on an external repo (e.g. "clone X and add feature Y"), it clones into `data/repos/` and delegates to Gemini CLI with that workspace. Configure `GIT_REPOS_DIR` if needed (must be under `GEMINI_CLI_WORKSPACE_ROOT`).
 
 ## .env essentials
 
@@ -38,8 +70,10 @@ See `backend/.env.example` for full options.
 - **/scan done** — finish: PDF preview, then confirmation
 - **/scan cancel** — cancel the session
 
-**Telegram:** preview with inline buttons “Send to Paperless” / “Discard”, or type “yes”/“no”.  
-**WhatsApp:** preview sent as a document; reply with “yes” or “no”.
+**Natural language:** Write "scanne am Drucker" or "scan document" to trigger a scan. For more pages: "noch eine Seite" or "weiter". To finish: "fertig" or "done".
+
+**Telegram:** preview with inline buttons "Send to Paperless" / "Discard", or type "yes"/"no".
+**WhatsApp:** preview sent as a document; reply with "yes" or "no".
 
 **PDF upload:** send a PDF file (Telegram/WhatsApp) → the bot asks whether to send it to Paperless. Confirm with the button or “yes”.
 
