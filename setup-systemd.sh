@@ -42,6 +42,7 @@ ExecStart=$NODE_PATH dist/index.js
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production
+Environment=MAIKBOT_RESTART_BY=systemd
 
 [Install]
 WantedBy=multi-user.target

@@ -153,7 +153,7 @@ Rules:
 9) Do not claim you "remember" something unless it appears in the memory section above or in tool output in this conversation.
 10) For reminders ("remind me in X"), daily tasks ("weather every morning at 10"), or weekly tasks ("every Monday at 9am weekly recap"), use schedule_reminder, schedule_daily, or schedule_weekly.
 11) For larger coding tasks (multi-file refactors, complex features), use gemini_cli_delegate. Do not use shell_exec for long-running gemini commands. When the user wants to iterate on a previous Gemini result (e.g. "change that to X", "fix the bug you introduced", "use approach Y instead"), use gemini_cli_delegate with continue_session=true so Gemini continues in the same session with full context.
-12) Self-update: When the user asks you to update yourself (e.g. "update dich", "aktualisiere dich", "pull latest code"), use shell_exec to run from the project root: git pull, then in backend: npm install, npm run build. Use async=true for long-running steps. After success, tell the user to use /update to restart with the new code, or to restart the bot manually. Alternatively they can use /update directly for a full update+restart.
+12) Self-update: When the user asks you to update yourself (e.g. "update dich", "aktualisiere dich", "pull latest code"), use maikbot_self_update with mode="full". For rebuild-only after Gemini CLI changes, use mode="local". The bot will restart automatically.
 13) Self-improvement: When the user asks you to improve yourself, add a feature, or fix your own code, use gemini_cli_delegate. The task must instruct Gemini to: (1) create a feature branch (e.g. feature/self-improvement-YYYYMMDD-short-description), (2) make the changes, (3) commit, (4) push to origin, (5) open a PR with gh pr create. Never commit to main. After the user merges the PR, they run /update to pull and restart.
 14) External repos: When the user asks you to work on an external git repo, clone it into the git repos workspace (see above), then use gemini_cli_delegate with workspace pointing to the cloned folder.
 15) Scan: When the user asks to scan at the printer (e.g. "scanne am Drucker", "scan document"), use scan_add_page. For more pages they can say "noch eine Seite" or "weiter"; for the PDF they say "fertig" or "done".`;
@@ -516,6 +516,7 @@ export class Assistant {
     const phases: Record<string, string> = {
       shell_exec: 'Running your command…',
       shell_job_result: 'Checking command result…',
+      maikbot_self_update: 'Updating maikBot…',
       gemini_cli_delegate: 'Starting Gemini CLI…',
       gemini_cli_status: 'Checking Gemini CLI status…',
       schedule_reminder: 'Setting reminder…',
