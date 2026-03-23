@@ -44,11 +44,14 @@ export async function performUpdate(mode: UpdateMode = 'full'): Promise<{ ok: bo
       logs.push('npm install ok');
     }
 
-    const buildEnv = {
-      ...process.env,
-      PATH: `${path.join(backendDir, 'node_modules', '.bin')}:${process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'}`,
-    };
-    execSync('npm run build', { cwd: backendDir, encoding: 'utf-8', env: buildEnv });
+    const tscPath = path.join(backendDir, 'node_modules', 'typescript', 'bin', 'tsc');
+    if (!fs.existsSync(tscPath)) {
+      throw new Error(`TypeScript not found at ${tscPath}. Run npm install first.`);
+    }
+    execSync(`${JSON.stringify(process.execPath)} ${JSON.stringify(tscPath)} -p tsconfig.json`, {
+      cwd: backendDir,
+      encoding: 'utf-8',
+    });
     logs.push('npm run build ok');
 
     logger.info('Self-update complete, exiting for restart');
