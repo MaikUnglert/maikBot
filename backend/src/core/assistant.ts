@@ -2,6 +2,7 @@ import path from 'node:path';
 import { llmService } from '../services/llm.service.js';
 import { mcpHostService } from '../services/mcp-host.service.js';
 import { performUpdate } from '../services/update.service.js';
+import { sendToSession } from '../services/channel-sender.service.js';
 import { toolRegistry } from './tool-registry.js';
 import { chatHistory } from './chat-history.js';
 import { config, type LlmProviderName } from '../config.js';
@@ -312,7 +313,9 @@ export class Assistant {
 
     if (trimmed === '/update') {
       trace.push('action: update');
-      const result = await performUpdate('full');
+      const result = await performUpdate('full', {
+        onSuccess: async (msg) => { await sendToSession(sessionId, msg); },
+      });
       return {
         reply: result.ok ? 'Update complete. Restarting…' : `Update failed:\n${result.output}`,
         trace,
@@ -321,7 +324,9 @@ export class Assistant {
 
     if (trimmed === '/reload') {
       trace.push('action: reload');
-      const result = await performUpdate('local');
+      const result = await performUpdate('local', {
+        onSuccess: async (msg) => { await sendToSession(sessionId, msg); },
+      });
       return {
         reply: result.ok ? 'Reload complete. Restarting…' : `Reload failed:\n${result.output}`,
         trace,

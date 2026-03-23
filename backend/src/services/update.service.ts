@@ -23,7 +23,15 @@ function getProjectRoot(): string {
   }
 }
 
-export async function performUpdate(mode: UpdateMode = 'full'): Promise<{ ok: boolean; output: string }> {
+export interface PerformUpdateOptions {
+  /** Called before exit on success – allows sending "Update complete" to the user. */
+  onSuccess?: (message: string) => Promise<void>;
+}
+
+export async function performUpdate(
+  mode: UpdateMode = 'full',
+  options?: PerformUpdateOptions
+): Promise<{ ok: boolean; output: string }> {
   const root = getProjectRoot();
   const backendInRoot = path.join(root, 'backend');
   const backendDir = fs.existsSync(path.join(backendInRoot, 'package.json'))
@@ -56,6 +64,9 @@ export async function performUpdate(mode: UpdateMode = 'full'): Promise<{ ok: bo
     logs.push('npm run build ok');
 
     logger.info('Self-update complete, exiting for restart');
+
+    const successMsg = mode === 'full' ? 'Update complete. Restarting…' : 'Reload complete. Restarting…';
+    await options?.onSuccess?.(successMsg);
 
     // When under systemd/PM2/Docker, just exit – process manager restarts.
     // When run manually, spawn a delayed restart so the new process starts AFTER we release the lock.
