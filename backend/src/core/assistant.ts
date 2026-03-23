@@ -144,6 +144,7 @@ ${memorySection}${reposNote}${gitAuthNote}
 
 Rules:
 1) Respond briefly and clearly in the users language unless the user explicitly asks for another language.
+1a) Format for chat (Telegram/WhatsApp): Use **bold**, bullet points (• or -), or numbered lists. Do NOT use Markdown tables (| col | col |)—they render poorly; instead use e.g. "• **Topic:** Summary" per item.
 2) You have access to tools (smart home, shell, browser, etc.). Use them when the user's request requires it.${browserNote}${visionNote}
 3) Do not invent tool results or device states. Only report what tools return.
 4) If a tool call fails with a name/match error, call ha_search_entities or ha_deep_search first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
