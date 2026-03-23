@@ -54,13 +54,16 @@ export async function performUpdate(mode: UpdateMode = 'full'): Promise<{ ok: bo
     if (!process.env.MAIKBOT_RESTART_BY && !process.env.INVOCATION_ID) {
       const logPath = path.join(root, 'data', 'restart.log');
       fs.mkdirSync(path.join(root, 'data'), { recursive: true });
-      const cmd = `sleep 3 && cd ${JSON.stringify(root)} && npm run start >> ${JSON.stringify(logPath)} 2>&1`;
-      spawn('sh', ['-c', `nohup sh -c ${JSON.stringify(cmd)} &`], {
+      const npmPath = execSync('which npm', { encoding: 'utf-8', env: { ...process.env, PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin' } }).trim();
+      const cmd = `sleep 3 && cd ${JSON.stringify(root)} && ${JSON.stringify(npmPath)} run start >> ${JSON.stringify(logPath)} 2>&1`;
+      const child = spawn('sh', ['-c', cmd], {
+        cwd: root,
         detached: true,
         stdio: 'ignore',
         env: { ...process.env, PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin' },
-      }).unref();
-      logger.info({ logPath }, 'Spawned delayed restart (3s, logs in data/restart.log)');
+      });
+      child.unref();
+      logger.info({ logPath, npmPath }, 'Spawned delayed restart (3s, logs in data/restart.log)');
       process.exit(0);
     }
     process.exit(0);
