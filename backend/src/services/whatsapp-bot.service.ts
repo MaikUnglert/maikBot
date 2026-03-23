@@ -32,6 +32,7 @@ import {
   handleConfirm,
   getPendingConfirmByTarget,
 } from './scan.service.js';
+import { formatMarkdownForWhatsApp } from './markdown-formatter.js';
 
 function extractText(msg: proto.IMessage): string | undefined {
   if (msg.conversation) return msg.conversation;
@@ -61,7 +62,7 @@ function formatAssistantReplyForWhatsApp(response: AssistantResponse): string {
     config.telegramShowAgentTrace && response.trace.length > 0
       ? `\n\n---\nAgent Trace:\n${response.trace.map((line) => `- ${line}`).join('\n')}`
       : '';
-  return `${response.reply}${traceBlock}`.slice(0, 4000);
+  return formatMarkdownForWhatsApp(`${response.reply}${traceBlock}`).slice(0, 4000);
 }
 
 function isAllowedSender(jid: string): boolean {
