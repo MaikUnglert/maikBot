@@ -2,6 +2,7 @@ import { taskSchedulerService } from '../../services/task-scheduler.service.js';
 import { logger } from '../../logger.js';
 import type { ToolDefinition } from '../../services/llm.types.js';
 import type { SessionId } from '../../core/channel-types.js';
+import { config } from '../../config.js';
 
 export interface ToolExecResult {
   ok: boolean;
@@ -77,7 +78,7 @@ export function getScheduleTools(sessionId: SessionId): {
         function: {
           name: 'schedule_daily',
           description:
-            'Schedule a daily recurring task (e.g. "send me the weather every morning at 10", "daily report at 9am"). Uses server local timezone.',
+            'Schedule a daily recurring task (e.g. "send me the weather every morning at 10", "daily report at 9am"). Uses the configured default timezone.',
           parameters: {
             type: 'object',
             required: ['message', 'hour', 'minute'],
@@ -117,12 +118,13 @@ export function getScheduleTools(sessionId: SessionId): {
             sessionId,
             hour,
             minute,
+            config.schedulerDefaultTimezone,
             `[Daily] ${message}`
           );
           const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
           return {
             ok: true,
-            output: `Daily task scheduled at ${timeStr} (server local time). (ID: ${id})`,
+            output: `Daily task scheduled at ${timeStr} (${config.schedulerDefaultTimezone} timezone). (ID: ${id})`,
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -137,7 +139,7 @@ export function getScheduleTools(sessionId: SessionId): {
         function: {
           name: 'schedule_weekly',
           description:
-            'Schedule a weekly recurring task (e.g. "every Monday at 9am send weekly recap", "every Sunday evening remind me to plan the week"). Uses server local timezone. day_of_week: 0=Sunday, 1=Monday, ..., 6=Saturday.',
+            'Schedule a weekly recurring task (e.g. "every Monday at 9am send weekly recap", "every Sunday evening remind me to plan the week"). Uses the configured default timezone. day_of_week: 0=Sunday, 1=Monday, ..., 6=Saturday.',
           parameters: {
             type: 'object',
             required: ['message', 'day_of_week', 'hour', 'minute'],
@@ -186,13 +188,14 @@ export function getScheduleTools(sessionId: SessionId): {
             dayOfWeek,
             hour,
             minute,
+            config.schedulerDefaultTimezone,
             `[Weekly] ${message}`
           );
           const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
           const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
           return {
             ok: true,
-            output: `Weekly task scheduled: every ${dayNames[dayOfWeek]} at ${timeStr} (server local time). (ID: ${id})`,
+            output: `Weekly task scheduled: every ${dayNames[dayOfWeek]} at ${timeStr} (${config.schedulerDefaultTimezone} timezone). (ID: ${id})`,
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);

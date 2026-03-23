@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { randomUUID } from 'node:crypto';
 import { wakeHeartbeat } from './heartbeat-wake.js';
+import { DateTime } from 'luxon';
 import type { SessionId } from '../core/channel-types.js';
 
 export interface ScheduledTask {
@@ -15,6 +16,8 @@ export interface ScheduledTask {
   /** For daily/weekly: hour (0-23) and minute (0-59) in server local time */
   hour?: number;
   minute?: number;
+  /** Timezone for daily/weekly tasks */
+  timezone?: string;
   /** For weekly: day of week 0=Sunday, 1=Monday, ..., 6=Saturday */
   dayOfWeek?: number;
   message: string;
@@ -63,6 +66,7 @@ async function loadTasks(): Promise<ScheduledTask[]> {
         runAt: t.runAt,
         hour: t.hour,
         minute: t.minute,
+        timezone: t.timezone,
         dayOfWeek: t.dayOfWeek,
         message: t.message,
         createdAt: t.createdAt ?? new Date().toISOString(),
@@ -80,29 +84,29 @@ async function saveTasks(tasks: ScheduledTask[]): Promise<void> {
   await fs.writeFile(p, JSON.stringify(tasks, null, 2), 'utf-8');
 }
 
-/** Compute next run for daily task (server local time). */
-function nextDailyRun(hour: number, minute: number): Date {
-  const now = new Date();
-  let next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
+/** Compute next run for daily task (in specific timezone). */
+function nextDailyRun(hour: number, minute: number, timezone: string): Date {
+  const now = DateTime.now().setZone(timezone);
+  let next = now.set({ hour, minute, second: 0, millisecond: 0 });
   if (next <= now) {
-    next.setDate(next.getDate() + 1);
+    next = next.plus({ days: 1 });
   }
-  return next;
+  return next.toJSDate();
 }
 
-/** Compute next run for weekly task (server local time). dayOfWeek: 0=Sun, 1=Mon, ..., 6=Sat */
-function nextWeeklyRun(dayOfWeek: number, hour: number, minute: number): Date {
-  const now = new Date();
-  const currentDay = now.getDay();
-  let daysUntil = (dayOfWeek - currentDay + 7) % 7;
-  if (daysUntil === 0) {
-    const candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
-    if (candidate <= now) daysUntil = 7;
+/** Compute next run for weekly task (in specific timezone). dayOfWeek: 0=Sun, 1=Mon, ..., 6=Sat */
+function nextWeeklyRun(dayOfWeek: number, hour: number, minute: number, timezone: string): Date {
+  const now = DateTime.now().setZone(timezone);
+  // Luxon's weekday is 1 for Monday, ..., 7 for Sunday. Our dayOfWeek is 0 for Sunday, ..., 6 for Saturday.
+  // So, convert our dayOfWeek to Luxon's weekday.
+  const luxonDayOfWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
+
+  let next = now.set({ hour, minute, second: 0, millisecond: 0 }).set({ weekday: luxonDayOfWeek });
+
+  if (next <= now) {
+    next = next.plus({ weeks: 1 });
   }
-  const next = new Date(now);
-  next.setDate(next.getDate() + daysUntil);
-  next.setHours(hour, minute, 0, 0);
-  return next;
+  return next.toJSDate();
 }
 
 export const taskSchedulerService = {
@@ -136,10 +140,11 @@ export const taskSchedulerService = {
     sessionId: SessionId,
     hour: number,
     minute: number,
+    timezone: string,
     message: string
   ): Promise<string> {
     const id = randomUUID();
-    const next = nextDailyRun(hour, minute);
+    const next = nextDailyRun(hour, minute, timezone);
     const task: ScheduledTask = {
       id,
       sessionId,
@@ -147,13 +152,14 @@ export const taskSchedulerService = {
       runAt: next.toISOString(),
       hour,
       minute,
+      timezone,
       message,
       createdAt: new Date().toISOString(),
     };
     const tasks = await loadTasks();
     tasks.push(task);
     await saveTasks(tasks);
-    logger.info({ id, sessionId, hour, minute, nextRun: task.runAt }, 'Scheduled daily task');
+    logger.info({ id, sessionId, hour, minute, timezone, nextRun: task.runAt }, 'Scheduled daily task');
     wakeHeartbeat();
     return id;
   },
@@ -181,10 +187,11 @@ export const taskSchedulerService = {
     dayOfWeek: number,
     hour: number,
     minute: number,
+    timezone: string,
     message: string
   ): Promise<string> {
     const id = randomUUID();
-    const next = nextWeeklyRun(dayOfWeek, hour, minute);
+    const next = nextWeeklyRun(dayOfWeek, hour, minute, timezone);
     const task: ScheduledTask = {
       id,
       sessionId,
@@ -193,6 +200,7 @@ export const taskSchedulerService = {
       dayOfWeek,
       hour,
       minute,
+      timezone,
       message,
       createdAt: new Date().toISOString(),
     };
@@ -261,7 +269,7 @@ export const taskSchedulerService = {
       if (runAt <= now) {
         due.push(task);
         if (task.type === 'daily' && task.hour !== undefined && task.minute !== undefined) {
-          const next = nextDailyRun(task.hour, task.minute);
+          const next = nextDailyRun(task.hour, task.minute, task.timezone ?? config.schedulerDefaultTimezone);
           remaining.push({ ...task, runAt: next.toISOString() });
         } else if (
           task.type === 'weekly' &&
@@ -269,7 +277,7 @@ export const taskSchedulerService = {
           task.hour !== undefined &&
           task.minute !== undefined
         ) {
-          const next = nextWeeklyRun(task.dayOfWeek, task.hour, task.minute);
+          const next = nextWeeklyRun(task.dayOfWeek, task.hour, task.minute, task.timezone ?? config.schedulerDefaultTimezone);
           remaining.push({ ...task, runAt: next.toISOString() });
         }
       } else {
