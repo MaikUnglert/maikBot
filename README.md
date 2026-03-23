@@ -63,21 +63,21 @@ See `backend/.env.example` for full options.
 
 ## Scan → Paperless
 
-`/scan` funktioniert in **Telegram** und **WhatsApp**. Startet Scan am Drucker (HP WebScan) oder per SANE/scanimage. Mehrere Seiten möglich:
+`/scan` works in **Telegram** and **WhatsApp**. It starts a scan from the printer (HP WebScan) or via SANE/scanimage. Multi-page scans are supported:
 
-- **/scan** – Seite scannen (oder erste Seite)
-- **/scan** – weitere Seite hinzufügen
-- **/scan done** – fertig: PDF-Vorschau, dann Bestätigung
-- **/scan cancel** – Session abbrechen
+- **/scan** — scan a page (or the first page)
+- **/scan** — add another page
+- **/scan done** — finish: PDF preview, then confirmation
+- **/scan cancel** — cancel the session
 
-**Natürliche Sprache:** Du kannst auch schreiben „scanne am Drucker“ oder „scan document“ – der Bot startet den Scan. Für weitere Seiten: „noch eine Seite“ oder „weiter“. Zum Abschluss: „fertig“ oder „done“.
+**Natural language:** Write "scanne am Drucker" or "scan document" to trigger a scan. For more pages: "noch eine Seite" or "weiter". To finish: "fertig" or "done".
 
-**Telegram:** Vorschau mit Inline-Buttons „Zu Paperless senden“ / „Verwerfen“, oder „ja“/„nein“ tippen.  
-**WhatsApp:** Vorschau als Dokument, dann antworte mit „ja“ oder „nein“.
+**Telegram:** preview with inline buttons "Send to Paperless" / "Discard", or type "yes"/"no".
+**WhatsApp:** preview sent as a document; reply with "yes" or "no".
 
-**PDF-Upload:** PDF als Datei schicken (Telegram/WhatsApp) → Bot fragt, ob zu Paperless senden. Bestätigen mit Button oder „ja“.
+**PDF upload:** send a PDF file (Telegram/WhatsApp) → the bot asks whether to send it to Paperless. Confirm with the button or “yes”.
 
-Voraussetzung: `SCAN_BACKEND=hp-webscan` + `SCAN_HP_PRINTER_IP` oder `SCAN_BACKEND=scanimage` (SANE/airscan). Paperless: `PAPERLESS_URL` + `PAPERLESS_TOKEN`.
+Requirements: `SCAN_BACKEND=hp-webscan` + `SCAN_HP_PRINTER_IP`, or `SCAN_BACKEND=scanimage` (SANE/airscan). Paperless: `PAPERLESS_URL` + `PAPERLESS_TOKEN`.
 
 ## Paperless-ngx document classification
 
@@ -90,14 +90,14 @@ When `PAPERLESS_URL` and `PAPERLESS_TOKEN` are set, maikBot runs an HTTP webhook
    PAPERLESS_CLASSIFY_PORT=3080
    ```
 
-2. **Paperless integration** – choose one:
+2. **Paperless integration** — choose one:
 
-   **A) Post-consumption script (empfohlen):**
+   **A) Post-consumption script (recommended):**
 
-   - Script auf Paperless-Server: `scripts/paperless-post-consume.sh`
-   - `MAIKBOT_URL` im Script setzen (z.B. `http://192.168.178.40:3080`)
+   - Script on the Paperless host: `scripts/paperless-post-consume.sh`
+   - Set `MAIKBOT_URL` in the script (e.g. `http://192.168.178.40:3080`)
    - `chmod +x paperless-post-consume.sh`
-   - **Docker:** In `docker-compose.yml`:
+   - **Docker:** in `docker-compose.yml`:
      ```yaml
      environment:
        POST_CONSUME_SCRIPT: /usr/src/paperless/scripts/paperless-post-consume.sh
@@ -105,7 +105,7 @@ When `PAPERLESS_URL` and `PAPERLESS_TOKEN` are set, maikBot runs an HTTP webhook
        - ./paperless-post-consume.sh:/usr/src/paperless/scripts/paperless-post-consume.sh:ro
      ```
 
-   **B) Workflow-Webhook (Paperless 2.14+):** Platzhalter wie `{doc_url}` werden in manchen Versionen nicht ersetzt. Wenn das Script nicht möglich ist:
-   - Verwaltung → Arbeitsabläufe → neuer Workflow
-   - Auslöser: „Dokument hinzugefügt“, Aktion: Webhook
-   - URL: `http://<maikbot-host>:3080/api/paperless-classify?doc_url={doc_url}` (oder Body mit doc_url)
+   **B) Workflow webhook (Paperless 2.14+):** placeholders such as `{doc_url}` are not expanded in some versions. If the script approach is not possible:
+   - Administration → Workflows → new workflow
+   - Trigger: “Document added”, action: Webhook
+   - URL: `http://<maikbot-host>:3080/api/paperless-classify?doc_url={doc_url}` (or body with `doc_url`)

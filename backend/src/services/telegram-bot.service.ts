@@ -132,7 +132,7 @@ async function handleDocumentUpload(bot: TelegramBot, msg: Message): Promise<boo
   await bot.sendChatAction(chatId, 'typing');
   const buf = await downloadTelegramDocument(bot, doc.file_id);
   if (!buf) {
-    await safeSendMessage(bot, chatId, 'PDF konnte nicht heruntergeladen werden.', {
+    await safeSendMessage(bot, chatId, 'Could not download the PDF.', {
       reply_to_message_id: msg.message_id,
     });
     return true;
@@ -150,8 +150,8 @@ async function handleDocumentUpload(bot: TelegramBot, msg: Message): Promise<boo
   const keyboard = {
     inline_keyboard: [
       [
-        { text: '✓ Zu Paperless senden', callback_data: `scan_confirm_${confirmId}_send` },
-        { text: '✗ Verwerfen', callback_data: `scan_confirm_${confirmId}_discard` },
+        { text: '✓ Send to Paperless', callback_data: `scan_confirm_${confirmId}_send` },
+        { text: '✗ Discard', callback_data: `scan_confirm_${confirmId}_discard` },
       ],
     ],
   };
@@ -159,7 +159,7 @@ async function handleDocumentUpload(bot: TelegramBot, msg: Message): Promise<boo
   await safeSendMessage(
     bot,
     chatId,
-    `PDF erhalten (${filename}). Zu Paperless senden?`,
+    `PDF received (${filename}). Send to Paperless?`,
     { reply_to_message_id: msg.message_id, reply_markup: keyboard }
   );
   return true;
@@ -189,7 +189,7 @@ async function handleScanCommand(
     await safeSendMessage(
       bot,
       chatId,
-      'Scan nicht konfiguriert. Setze SCAN_BACKEND (hp-webscan/scanimage) und SCAN_HP_PRINTER_IP oder nutze scanimage.',
+      'Scan is not configured. Set SCAN_BACKEND (hp-webscan or scanimage), SCAN_HP_PRINTER_IP for hp-webscan, or configure SANE/scanimage.',
       { reply_to_message_id: msg.message_id }
     );
     return true;
@@ -201,7 +201,7 @@ async function handleScanCommand(
 
   if (arg === 'cancel' || arg === 'abbrechen') {
     const result = cancelSession(targetKey);
-    await safeSendMessage(bot, chatId, result.ok ? result.message! : result.message ?? 'Keine Session.', {
+    await safeSendMessage(bot, chatId, result.ok ? result.message! : result.message ?? 'No session.', {
       reply_to_message_id: msg.message_id,
     });
     return true;
@@ -211,26 +211,26 @@ async function handleScanCommand(
     await bot.sendChatAction(chatId, 'upload_document');
     const finishResult = await finishSession(targetKey);
     if (!finishResult.ok) {
-      await safeSendMessage(bot, chatId, finishResult.error ?? 'Fehler.', {
+      await safeSendMessage(bot, chatId, finishResult.error ?? 'Error.', {
         reply_to_message_id: msg.message_id,
       });
       return true;
     }
     if (!finishResult.pdfPath) {
-      await safeSendMessage(bot, chatId, 'Kein PDF erstellt.', {
+      await safeSendMessage(bot, chatId, 'No PDF was created.', {
         reply_to_message_id: msg.message_id,
       });
       return true;
     }
     try {
       const pdfBuf = await fs.readFile(finishResult.pdfPath);
-      const caption = `Vorschau (${finishResult.pageCount} Seite(n)). Zu Paperless senden?`;
+      const caption = `Preview (${finishResult.pageCount} page(s)). Send to Paperless?`;
       const confirmId = randomConfirmId();
       const keyboard = {
         inline_keyboard: [
           [
-            { text: '✓ Zu Paperless senden', callback_data: `scan_confirm_${confirmId}_send` },
-            { text: '✗ Verwerfen', callback_data: `scan_confirm_${confirmId}_discard` },
+            { text: '✓ Send to Paperless', callback_data: `scan_confirm_${confirmId}_send` },
+            { text: '✗ Discard', callback_data: `scan_confirm_${confirmId}_discard` },
           ],
         ],
       };
@@ -248,7 +248,7 @@ async function handleScanCommand(
       );
     } catch (err) {
       logger.error({ err }, 'Failed to send scan preview');
-      await safeSendMessage(bot, chatId, 'Vorschau konnte nicht gesendet werden.', {
+      await safeSendMessage(bot, chatId, 'Could not send the preview.', {
         reply_to_message_id: msg.message_id,
       });
     }
@@ -260,7 +260,7 @@ async function handleScanCommand(
   await safeSendMessage(
     bot,
     chatId,
-    addResult.ok ? addResult.message! : addResult.message ?? addResult.error ?? 'Scan fehlgeschlagen.',
+    addResult.ok ? addResult.message! : addResult.message ?? addResult.error ?? 'Scan failed.',
     { reply_to_message_id: msg.message_id }
   );
   return true;
@@ -323,16 +323,16 @@ async function handleMessage(bot: TelegramBot, msg: Message): Promise<void> {
           await safeSendMessage(
             bot,
             chatId,
-            `✓ Dokument an Paperless gesendet.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`,
+            `✓ Document sent to Paperless.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`,
             { reply_to_message_id: msg.message_id }
           );
         } else {
-          await safeSendMessage(bot, chatId, 'Verworfen.', {
+          await safeSendMessage(bot, chatId, 'Discarded.', {
             reply_to_message_id: msg.message_id,
           });
         }
       } else {
-        await safeSendMessage(bot, chatId, `Fehler: ${result.error ?? 'Unbekannt'}`, {
+        await safeSendMessage(bot, chatId, `Error: ${result.error ?? 'Unknown'}`, {
           reply_to_message_id: msg.message_id,
         });
       }
@@ -535,9 +535,9 @@ export function startTelegramBot(): TelegramBot {
     await bot.answerCallbackQuery(query.id, {
       text: result.ok
         ? action === 'send'
-          ? 'An Paperless gesendet.'
-          : 'Verworfen.'
-        : result.error ?? 'Fehler.',
+          ? 'Sent to Paperless.'
+          : 'Discarded.'
+        : result.error ?? 'Error.',
     });
 
     try {
@@ -555,11 +555,11 @@ export function startTelegramBot(): TelegramBot {
         result.documentId && base ? `\n${base}/documents/${result.documentId}` : '';
       await bot.sendMessage(
         chatId,
-        `✓ Dokument an Paperless gesendet.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`,
+        `✓ Document sent to Paperless.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`,
         { reply_to_message_id: messageId }
       );
     } else if (action === 'send' && !result.ok && result.error) {
-      await bot.sendMessage(chatId, `Fehler beim Hochladen: ${result.error}`, {
+      await bot.sendMessage(chatId, `Upload failed: ${result.error}`, {
         reply_to_message_id: messageId,
       });
     }
