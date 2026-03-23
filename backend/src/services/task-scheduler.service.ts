@@ -99,7 +99,7 @@ function nextWeeklyRun(dayOfWeek: number, hour: number, minute: number, timezone
   const now = DateTime.now().setZone(timezone);
   // Luxon's weekday is 1 for Monday, ..., 7 for Sunday. Our dayOfWeek is 0 for Sunday, ..., 6 for Saturday.
   // So, convert our dayOfWeek to Luxon's weekday.
-  const luxonDayOfWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
+  const luxonDayOfWeek = (dayOfWeek === 0 ? 7 : dayOfWeek) as any;
 
   let next = now.set({ hour, minute, second: 0, millisecond: 0 }).set({ weekday: luxonDayOfWeek });
 
