@@ -44,7 +44,7 @@ const PROGRESS_EDIT_THROTTLE_MS = 900;
 /** Status overlay only for turns that may hit the LLM (not instant slash commands). */
 function shouldShowProgressOverlay(text: string): boolean {
   const t = text.trim();
-  if (t === '/clear' || t === '/status' || t === '/info' || t === '/help' || t === '/commands') return false;
+  if (t === '/clear' || t === '/status' || t === '/info' || t === '/help' || t === '/commands' || t === '/update' || t === '/reload') return false;
   if (t.startsWith('/model')) return false;
   if (t.startsWith('/scan')) return false;
   return true;
@@ -461,6 +461,8 @@ export function startTelegramBot(): TelegramBot {
     { command: 'info', description: 'List all commands' },
     { command: 'clear', description: 'Clear chat history' },
     { command: 'model', description: 'Switch LLM provider (ollama/gemini/nvidia)' },
+    { command: 'update', description: 'Pull updates, build, restart' },
+    { command: 'reload', description: 'Build and restart (for self-improvements)' },
     { command: 'status', description: 'Show session status' },
     { command: 'scan', description: 'Scan document, /scan done, /scan cancel' },
     { command: 'mcp', description: 'List MCP tools (e.g. /mcp tools)' },

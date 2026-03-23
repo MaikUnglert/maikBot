@@ -63,9 +63,13 @@ const envSchema = z.object({
   SHELL_JOBS_DATA_DIR: z.string().optional(),
   /** Allowed workspace root for Gemini CLI (must be absolute path). Default: process.cwd() */
   GEMINI_CLI_WORKSPACE_ROOT: z.string().optional(),
+  /** Directory for cloning external git repos to work on. Must be under GEMINI_CLI_WORKSPACE_ROOT. Default: data/repos */
+  GIT_REPOS_DIR: z.string().optional(),
 
   /** Chat session max age in ms before pruning. Default: 24h (for long-running Gemini CLI jobs). */
   CHAT_MAX_AGE_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
+  /** Directory for persisted chat sessions (survives restart). Default: data/chat-sessions */
+  CHAT_SESSIONS_DIR: z.string().optional(),
 
   HA_MCP_BASE_URL: z.string().url().optional(),
   HA_MCP_API_KEY: z.string().optional(),
@@ -259,6 +263,18 @@ function resolveScanDataDir(raw: string | undefined): string {
   return path.resolve(process.cwd(), 'data', 'scan');
 }
 
+function resolveChatSessionsDir(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return path.resolve(process.cwd(), 'data', 'chat-sessions');
+}
+
+function resolveGitReposDir(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (trimmed) return path.resolve(trimmed);
+  return path.resolve(process.cwd(), 'data', 'repos');
+}
+
 function parseWhatsAppAllowedFrom(raw: string): Set<string> {
   const entries = raw.split(',').map((e) => e.trim()).filter(Boolean);
   return new Set(entries);
@@ -307,7 +323,9 @@ export const config = {
   jobsDataDir: resolveJobsDataDir(env.JOBS_DATA_DIR),
   shellJobsDataDir: resolveShellJobsDataDir(env.SHELL_JOBS_DATA_DIR),
   geminiCliWorkspaceRoot: resolveGeminiCliWorkspace(env.GEMINI_CLI_WORKSPACE_ROOT),
+  gitReposDir: resolveGitReposDir(env.GIT_REPOS_DIR),
   chatMaxAgeMs: env.CHAT_MAX_AGE_MS,
+  chatSessionsDir: resolveChatSessionsDir(env.CHAT_SESSIONS_DIR),
   logLevel: env.LOG_LEVEL,
 
   whatsappEnabled: env.WHATSAPP_ENABLED,

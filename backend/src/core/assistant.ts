@@ -1,5 +1,7 @@
+import path from 'node:path';
 import { llmService } from '../services/llm.service.js';
 import { mcpHostService } from '../services/mcp-host.service.js';
+import { performUpdate } from '../services/update.service.js';
 import { toolRegistry } from './tool-registry.js';
 import { chatHistory } from './chat-history.js';
 import { config, type LlmProviderName } from '../config.js';
@@ -115,11 +117,20 @@ ${memoryContent}
     config.geminiApiKey || config.ollamaBaseUrl
       ? ' You can analyze images (vision_analyze_image) when the user sends a photo or provides an image path.'
       : '';
+  const reposWorkspace = path.relative(config.geminiCliWorkspaceRoot, config.gitReposDir);
+  const reposNote =
+    !reposWorkspace.startsWith('..') && reposWorkspace !== ''
+      ? `
+
+--- Git repos workspace ---
+When the user asks you to work on an external repo (e.g. "clone X and add feature Y", "work on repo Z"), clone it into ${config.gitReposDir}. Use shell_exec: mkdir -p ${config.gitReposDir} && cd ${config.gitReposDir} && git clone <url>. Then use gemini_cli_delegate with workspace "${reposWorkspace}/<repo-folder-name>" for the task. The folder name is usually the last part of the repo URL (e.g. github.com/foo/bar → bar).
+---`
+      : '';
 
   return `You are MaikBot, a local AI assistant running on a home server.
 
 Current date and time: ${timeStr}
-${memorySection}
+${memorySection}${reposNote}
 
 Rules:
 1) Respond briefly and clearly in English unless the user explicitly asks for another language.
@@ -132,7 +143,10 @@ Rules:
 8) Memory: The content of memory.md is shown above. When it makes sense to persist something (nicknames for HA entities, user preferences, learned facts), ask: "Should I save this to memory?" and wait for confirmation. When the user confirms, use shell_exec to append (e.g. echo "- Schreibtisch -> light.desk_lamp" >> ${memoryPath}) or edit with sed. File path: ${memoryPath}
 9) Do not claim you "remember" something unless it appears in the memory section above or in tool output in this conversation.
 10) For reminders ("remind me in X"), daily tasks ("weather every morning at 10"), or weekly tasks ("every Monday at 9am weekly recap"), use schedule_reminder, schedule_daily, or schedule_weekly.
-11) For larger coding tasks (multi-file refactors, complex features), use gemini_cli_delegate. Do not use shell_exec for long-running gemini commands.`;
+11) For larger coding tasks (multi-file refactors, complex features), use gemini_cli_delegate. Do not use shell_exec for long-running gemini commands. When the user wants to iterate on a previous Gemini result (e.g. "change that to X", "fix the bug you introduced", "use approach Y instead"), use gemini_cli_delegate with continue_session=true so Gemini continues in the same session with full context.
+12) Self-update: When the user asks you to update yourself (e.g. "update dich", "aktualisiere dich", "pull latest code"), use shell_exec to run from the project root: git pull, then in backend: npm install, npm run build. Use async=true for long-running steps. After success, tell the user to use /update to restart with the new code, or to restart the bot manually. Alternatively they can use /update directly for a full update+restart.
+13) Self-improvement: When the user asks you to improve yourself, add a feature, or fix your own code, use gemini_cli_delegate. The task must instruct Gemini to: (1) create a feature branch (e.g. feature/self-improvement-YYYYMMDD-short-description), (2) make the changes, (3) commit, (4) push to origin, (5) open a PR with gh pr create. Never commit to main. After the user merges the PR, they run /update to pull and restart.
+14) External repos: When the user asks you to work on an external git repo, clone it into the git repos workspace (see above), then use gemini_cli_delegate with workspace pointing to the cloned folder.`;
 }
 
 const TRIAGE_SYSTEM_PROMPT = `You are MaikBot. The agent ALWAYS has: shell, browser, vision, schedule, gemini_cli, agent config, and Home Assistant search + control (search entities, turn on/off, get state).
@@ -286,6 +300,24 @@ export class Assistant {
       return this.handleModelCommand(trimmed, trace);
     }
 
+    if (trimmed === '/update') {
+      trace.push('action: update');
+      const result = await performUpdate('full');
+      return {
+        reply: result.ok ? 'Update complete. Restarting…' : `Update failed:\n${result.output}`,
+        trace,
+      };
+    }
+
+    if (trimmed === '/reload') {
+      trace.push('action: reload');
+      const result = await performUpdate('local');
+      return {
+        reply: result.ok ? 'Reload complete. Restarting…' : `Reload failed:\n${result.output}`,
+        trace,
+      };
+    }
+
     if (trimmed === '/clear') {
       chatHistory.clear(sessionId);
       trace.push('action: history_cleared');
@@ -308,6 +340,8 @@ export class Assistant {
 
 /clear – Clear chat history
 /model – Switch LLM (ollama / gemini / nvidia). Example: /model nvidia
+/update – Pull updates, build, restart (needs process manager)
+/reload – Build and restart only (for Gemini CLI self-improvements)
 /status – Show session status (model, message count, tokens)
 /scan – Scan document (HP WebScan or SANE). /scan done, /scan cancel. PDF hochladen → zu Paperless senden.
 /mcp tools – List MCP tools (e.g. Home Assistant)

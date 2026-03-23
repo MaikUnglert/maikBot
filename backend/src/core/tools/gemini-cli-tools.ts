@@ -20,7 +20,7 @@ export function getGeminiCliTools(sessionId: SessionId): {
         function: {
           name: 'gemini_cli_delegate',
           description:
-            'Delegate a larger coding task to Gemini CLI (runs in background, auto-approves edits). Use when the user asks for multi-file refactors, complex features, or coding work that exceeds quick fixes. Gemini CLI will run in YOLO mode. You will be notified when it finishes so you can review and report to the user.',
+            'Delegate a larger coding task to Gemini CLI (runs in background, auto-approves edits). Use when the user asks for multi-file refactors, complex features, or self-improvement. Set continue_session=true when the user wants to iterate on the previous Gemini result (e.g. "change that to X", "fix the bug") – continues in the same Gemini session.',
           parameters: {
             type: 'object',
             required: ['task'],
@@ -28,7 +28,12 @@ export function getGeminiCliTools(sessionId: SessionId): {
               task: {
                 type: 'string',
                 description:
-                  'Clear description of the coding task for Gemini CLI. E.g. "Refactor the auth module to use JWT", "Add unit tests for UserService".',
+                  'Clear description of the task. For iterations: describe the follow-up change. For self-improvement: include "create a feature branch, make the changes, commit, push, gh pr create. Never commit to main."',
+              },
+              continue_session: {
+                type: 'boolean',
+                description:
+                  'If true, resume the latest Gemini CLI session and run this task as a follow-up. Use when the user wants to iterate on the previous result (same chat history).',
               },
               workspace: {
                 type: 'string',
@@ -55,6 +60,7 @@ export function getGeminiCliTools(sessionId: SessionId): {
         const includeDirs = Array.isArray(args.include_dirs)
           ? (args.include_dirs as string[]).map((d) => String(d).trim()).filter(Boolean)
           : undefined;
+        const continueSession = args.continue_session === true;
 
         const contextSnapshot = chatHistory.getContextSnapshot(sessionId, task);
 
@@ -64,11 +70,14 @@ export function getGeminiCliTools(sessionId: SessionId): {
             task,
             contextSnapshot,
             workspace,
-            includeDirs
+            includeDirs,
+            continueSession
           );
           return {
             ok: true,
-            output: `Gemini CLI job started (ID: ${id}). It is running in the background. You will receive the result for review when it finishes. Tell the user: "I've handed this off to Gemini CLI. It may take a few minutes. I'll review the result and notify you when it's done."`,
+            output: continueSession
+              ? `Gemini CLI job started (ID: ${id}), continuing in the same session. You will be notified when it finishes.`
+              : `Gemini CLI job started (ID: ${id}). It is running in the background. You will receive the result for review when it finishes. Tell the user: "I've handed this off to Gemini CLI. It may take a few minutes. I'll review the result and notify you when it's done."`,
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
