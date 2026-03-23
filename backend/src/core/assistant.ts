@@ -309,7 +309,7 @@ export class Assistant {
 /clear – Clear chat history
 /model – Switch LLM (ollama / gemini / nvidia). Example: /model nvidia
 /status – Show session status (model, message count, tokens)
-/scan – Scan document (HP WebScan or SANE). /scan done, /scan cancel. PDF hochladen → zu Paperless senden.
+/scan – Scan document (HP WebScan or SANE). /scan done, /scan cancel. Upload PDF → send to Paperless.
 /mcp tools – List MCP tools (e.g. Home Assistant)
 /info – This help`,
         trace,

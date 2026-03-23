@@ -250,13 +250,13 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
                 const link = result.documentId && base ? `\n${base}/documents/${result.documentId}` : '';
                 await sendMessage(
                   remoteJid,
-                  `✓ An Paperless gesendet.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`
+                  `✓ Sent to Paperless.${result.documentId ? ` (ID: ${result.documentId})` : ''}${link}`
                 );
               } else if (isNein) {
-                await sendMessage(remoteJid, 'Verworfen.');
+                await sendMessage(remoteJid, 'Discarded.');
               }
             } else {
-              await sendMessage(remoteJid, `Fehler: ${result.error ?? 'Unbekannt'}`);
+              await sendMessage(remoteJid, `Error: ${result.error ?? 'Unknown'}`);
             }
             continue;
           }
@@ -294,14 +294,14 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
 
                 await sendMessage(
                   remoteJid,
-                  `PDF erhalten (${filename}). Antworte mit "ja" um zu Paperless zu senden, "nein" zum Verwerfen.`
+                  `PDF received (${filename}). Reply "yes" to send to Paperless, "no" to discard.`
                 );
               } else {
-                await sendMessage(remoteJid, 'PDF konnte nicht heruntergeladen werden.');
+                await sendMessage(remoteJid, 'Could not download the PDF.');
               }
             } catch (err) {
               logger.error({ err }, 'WhatsApp: failed to download document');
-              await sendMessage(remoteJid, 'Fehler beim Herunterladen der PDF.');
+              await sendMessage(remoteJid, 'Error downloading the PDF.');
             }
             continue;
           }
@@ -317,23 +317,23 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
           if (!isScanEnabled()) {
             await sendMessage(
               remoteJid,
-              'Scan nicht konfiguriert. Setze SCAN_BACKEND und SCAN_SANE_DEVICE.'
+              'Scan is not configured. Set SCAN_BACKEND (hp-webscan or scanimage), SCAN_HP_PRINTER_IP for hp-webscan, or configure SANE/scanimage (see SCAN_SANE_DEVICE).'
             );
             continue;
           }
           if (arg === 'cancel' || arg === 'abbrechen') {
             const result = cancelSession(targetKey);
-            await sendMessage(remoteJid, result.ok ? result.message! : result.message ?? 'Keine Session.');
+            await sendMessage(remoteJid, result.ok ? result.message! : result.message ?? 'No session.');
             continue;
           }
           if (arg === 'done' || arg === 'fertig') {
             const finishResult = await finishSession(targetKey);
             if (!finishResult.ok) {
-              await sendMessage(remoteJid, finishResult.error ?? 'Fehler.');
+              await sendMessage(remoteJid, finishResult.error ?? 'Error.');
               continue;
             }
             if (!finishResult.pdfPath) {
-              await sendMessage(remoteJid, 'Kein PDF erstellt.');
+              await sendMessage(remoteJid, 'No PDF was created.');
               continue;
             }
             try {
@@ -345,7 +345,7 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
                   fileName: `scan_${finishResult.sessionId ?? 'doc'}.pdf`,
                 });
               } else {
-                await sendMessage(remoteJid, 'Verbindung unterbrochen. Bitte später erneut versuchen.');
+                await sendMessage(remoteJid, 'Connection lost. Please try again later.');
                 continue;
               }
               const confirmId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -357,18 +357,18 @@ export async function startWhatsAppBot(): Promise<WhatsAppBotResult | null> {
               );
               await sendMessage(
                 remoteJid,
-                `Vorschau (${finishResult.pageCount} Seite(n)). Antworte mit "ja" um zu Paperless zu senden, "nein" zum Verwerfen.`
+                `Preview (${finishResult.pageCount} page(s)). Reply "yes" to send to Paperless, "no" to discard.`
               );
             } catch (err) {
               logger.error({ err }, 'WhatsApp: failed to send scan preview');
-              await sendMessage(remoteJid, 'Vorschau konnte nicht gesendet werden.');
+              await sendMessage(remoteJid, 'Could not send the preview.');
             }
             continue;
           }
           const addResult = await startOrAddPage(targetKey);
           await sendMessage(
             remoteJid,
-            addResult.ok ? addResult.message! : addResult.message ?? addResult.error ?? 'Scan fehlgeschlagen.'
+            addResult.ok ? addResult.message! : addResult.message ?? addResult.error ?? 'Scan failed.'
           );
           continue;
         }
