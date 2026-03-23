@@ -40,7 +40,8 @@ export async function performUpdate(mode: UpdateMode = 'full'): Promise<{ ok: bo
     if (mode === 'full') {
       execSync('git pull', { cwd: root, encoding: 'utf-8' });
       logs.push('git pull ok');
-      execSync('npm install', { cwd: backendDir, encoding: 'utf-8' });
+      // NODE_ENV=production skips devDependencies – we need typescript for build
+      execSync('npm install --include=dev', { cwd: backendDir, encoding: 'utf-8' });
       logs.push('npm install ok');
     }
 
