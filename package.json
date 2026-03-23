@@ -1,0 +1,13 @@
+{
+  "name": "maikbot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "maikBot – AI assistant via Telegram/WhatsApp",
+  "scripts": {
+    "setup": "npm install --prefix backend",
+    "dev": "npm run dev --prefix backend",
+    "build": "npm run build --prefix backend",
+    "start": "npm run start --prefix backend",
+    "check": "npm run check --prefix backend"
+  }
+}
