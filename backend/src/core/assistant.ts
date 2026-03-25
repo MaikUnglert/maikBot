@@ -345,10 +345,47 @@ export class Assistant {
 /status – Show session status (model, message count, tokens)
 /scan – Scan document (HP WebScan or SANE). /scan done, /scan cancel. Upload PDF → send to Paperless.
 /mcp tools – List MCP tools (e.g. Home Assistant)
+/night – Turn off all lights and enable night mode in Home Assistant
 /info – This help`,
         trace,
       };
     }
+
+    if (trimmed === '/night') {
+      trace.push('action: night_mode');
+      const feedback: string[] = ['Turning off all lights and enabling night mode.'];
+      try {
+        await mcpHostService.runTool('ha_call_service', {
+          domain: 'light',
+          service: 'turn_off',
+          service_data: {},
+        });
+        feedback.push('Lights turned off.');
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        feedback.push(`Failed to turn off lights: ${errMsg}`);
+        logger.error({ err: error }, 'Failed to turn off lights');
+      }
+
+      try {
+        await mcpHostService.runTool('ha_call_service', {
+          domain: 'script',
+          service: 'turn_on',
+          service_data: { entity_id: 'script.night_mode' },
+        });
+        feedback.push('Night mode enabled.');
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        feedback.push(`Failed to enable night mode: ${errMsg}. If "script.night_mode" does not exist, consider creating it in Home Assistant.`);
+        logger.error({ err: error }, 'Failed to enable night mode');
+      }
+
+      return {
+        reply: feedback.join('\n'),
+        trace,
+      };
+    }
+
 
     if (trimmed.startsWith('/mcp ')) {
       const instruction = trimmed.replace(/^\/mcp\s+/i, '').trim();
