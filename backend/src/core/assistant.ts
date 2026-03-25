@@ -9,7 +9,6 @@ import { config, type LlmProviderName } from '../config.js';
 import { logger } from '../logger.js';
 import {
   ON_DEMAND_HA_CATEGORY_IDS,
-  getCategoryIds,
   getToolsForCategories,
   getAlwaysLoadedToolNames,
   buildOnDemandHaCategoryListForPrompt,
@@ -380,37 +379,31 @@ export class Assistant {
       let selectedCategories: string[] = [];
       let includeLoadHaTool = false;
 
-      if (config.llmSkipTriage) {
-        trace.push('phase: full_tool_catalog (LLM_SKIP_TRIAGE)');
-        await report('Loading tools (full catalog)…');
-        selectedCategories = [...getCategoryIds()];
+      const fastCats = tryHaFastPathCategories(trimmed);
+      const urlCats = tryUrlFastPathCategories(trimmed);
+      if (fastCats) {
+        trace.push(`phase: ha_fast_path → [${fastCats.join(', ')}]`);
+        await report('Quick path: device search & control…');
+        selectedCategories = fastCats;
+        includeLoadHaTool = true;
+      } else if (urlCats) {
+        trace.push(`phase: url_fast_path → [${urlCats.join(', ')}]`);
+        await report('Loading browser tools…');
+        selectedCategories = urlCats;
+        includeLoadHaTool = true;
       } else {
-        const fastCats = tryHaFastPathCategories(trimmed);
-        const urlCats = tryUrlFastPathCategories(trimmed);
-        if (fastCats) {
-          trace.push(`phase: ha_fast_path → [${fastCats.join(', ')}]`);
-          await report('Quick path: device search & control…');
-          selectedCategories = fastCats;
-          includeLoadHaTool = true;
-        } else if (urlCats) {
-          trace.push(`phase: url_fast_path → [${urlCats.join(', ')}]`);
-          await report('Loading browser tools…');
-          selectedCategories = urlCats;
-          includeLoadHaTool = true;
-        } else {
-          trace.push('phase: base_tools_plus_load_ha');
-          includeLoadHaTool = true;
-        }
+        trace.push('phase: base_tools_plus_load_ha');
+        includeLoadHaTool = true;
+      }
 
-        const pendingSaveConfirmation =
-          selectedCategories.length === 0 &&
-          looksLikeSaveConfirmation(trimmed) &&
-          lastAssistantAskedToSave(history);
+      const pendingSaveConfirmation =
+        selectedCategories.length === 0 &&
+        looksLikeSaveConfirmation(trimmed) &&
+        lastAssistantAskedToSave(history);
 
-        if (pendingSaveConfirmation) {
-          trace.push('phase: save_confirmation_force_shell');
-          selectedCategories = ['shell'];
-        }
+      if (pendingSaveConfirmation) {
+        trace.push('phase: save_confirmation_force_shell');
+        selectedCategories = ['shell'];
       }
 
       const loadedHaCategories = new Set(

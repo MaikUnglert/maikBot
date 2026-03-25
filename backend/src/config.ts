@@ -42,8 +42,6 @@ const envSchema = z.object({
   LLM_MAX_TOOL_CALLS: z.coerce.number().int().min(0).default(0),
   SHELL_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   TELEGRAM_SHOW_AGENT_TRACE: booleanString.default('false'),
-  /** Load all HA tool categories every message (no load_ha_tool_categories; largest tool schema per request). */
-  LLM_SKIP_TRIAGE: booleanString.default('false'),
   /** Heuristic: short on/off-style phrasing uses only search+control HA tools until load_ha_tool_categories is called. */
   LLM_HA_FAST_PATH: booleanString.default('true'),
 
@@ -316,7 +314,6 @@ export const config = {
   llmMaxToolCalls: env.LLM_MAX_TOOL_CALLS,
   shellTimeoutMs: env.SHELL_TIMEOUT_MS,
   telegramShowAgentTrace: env.TELEGRAM_SHOW_AGENT_TRACE,
-  llmSkipTriage: env.LLM_SKIP_TRIAGE,
   llmHaFastPath: env.LLM_HA_FAST_PATH,
   memoryDataDir: resolveMemoryDataDir(env.MEMORY_DATA_DIR),
   heartbeatActiveIntervalSec: env.HEARTBEAT_ACTIVE_INTERVAL_SEC,

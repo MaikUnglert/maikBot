@@ -48,7 +48,6 @@ flowchart TB
 | Setting | Effect |
 |---------|--------|
 | Default | Base tools + HA search/control + `load_ha_tool_categories` for deeper HA (automation, dashboards, history, …). Fewer MCP tools in the schema until the model loads them. |
-| `LLM_SKIP_TRIAGE=true` | Misleading name kept for compatibility: loads **all** tool categories on every message (largest schema). No `load_ha_tool_categories` step. |
 | `LLM_HA_FAST_PATH=true` | Short on/off-style phrases start with only HA **search** + **control**; the model can still call `load_ha_tool_categories` if it needs more. |
 
 ## Quick Start
