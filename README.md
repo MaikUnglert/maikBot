@@ -6,41 +6,62 @@ AI assistant via Telegram (and optional WhatsApp). LLM: Gemini, Ollama, or NVIDI
 
 High-level request flow: the channel layer forwards text to the assistant, which runs a **tool loop** against the configured LLM. **Home Assistant** capabilities are split into a **base** set (search, state, simple control) and **on-demand** categories; the model can call `load_ha_tool_categories` mid-turn to attach more `ha_*` MCP tools before the next iteration. Built-in tools (shell, Gemini CLI, browser, schedule, scan, …) are loaded according to the same allowlist. Slash commands such as `/update` are handled **before** the tool loop.
 
+**Routing (before the first LLM call):** two optional **fast paths** shrink the initial tool schema—**HA** = short on/off-style phrases (German/English) → only HA **search** + **control**; **URL** = link or “open website” phrasing → same base as default but **browser** tools included from the start. If neither matches, the default is base tools plus **`load_ha_tool_categories`**. All paths then enter the same tool loop.
+
+**Tool loop:** each LLM response is either **final text** (sent to the user) or **tool calls**. The backend runs those tools, **appends the tool outputs** to the conversation as `tool` messages, and **calls the LLM again** with that longer context. After **`load_ha_tool_categories`**, the registry is **reloaded** so the **next** LLM call sees the expanded `ha_*` definitions. This repeats until the model returns text without tools.
+
 ```mermaid
 flowchart TB
   subgraph channels [Channels]
     TG[Telegram / WhatsApp]
   end
 
-  subgraph pipeline [Assistant pipeline]
+  subgraph entry [Before first LLM call]
     H[handleTextWithTrace]
     SL[Slash commands: /update, /clear, …]
-    FP{HA or URL fast path?}
-    REG[Build allowed tool set + registry]
-    LOOP[Tool loop: LLM calls and tool results]
-    LHA[load_ha_tool_categories]
-    RLD[Reload tools from registry]
+    RT{Shortcut match?}
+    HAFP[HA fast path: HA search + control only]
+    URLFP[URL fast path: + browser tools]
+    DEF[Default: base tools + load_ha_tool_categories]
+    REG[Build tool schema from registry]
   end
 
-  subgraph providers [Backends]
-    LLM[LLM: Gemini / Ollama / NVIDIA]
+  subgraph loop [Tool loop: until reply without tool calls]
+    LLM[LLM call with messages + tool schema]
+    EXEC[Execute tool calls]
+    APP[Append tool results to conversation]
+    LLM -->|assistant message includes tool_calls| EXEC
+    EXEC --> APP
+    APP -->|same turn, richer context| LLM
+    LLM -->|plain text, no tools| OUT[Final reply to user]
+  end
+
+  subgraph backends [Backends invoked by EXEC]
     MCP[MCP: Home Assistant]
-    EXT[Built-in: shell, browser, schedule, Gemini CLI, …]
+    EXT[Built-in: shell, schedule, Gemini CLI, scan, …]
+    LHA[load_ha_tool_categories]
+    RLD[Reload tool schema from registry]
   end
 
   TG --> H
   H --> SL
   SL -->|matched| TG
-  H --> FP
-  FP --> REG
-  REG --> LOOP
-  LOOP <--> LLM
-  LOOP --> MCP
-  LOOP --> EXT
-  LOOP --> LHA
+  H --> RT
+  RT -->|short on / off phrase| HAFP
+  RT -->|URL or website intent| URLFP
+  RT -->|neither| DEF
+  HAFP --> REG
+  URLFP --> REG
+  DEF --> REG
+  REG --> LLM
+
+  EXEC --> MCP
+  EXEC --> EXT
+  EXEC --> LHA
   LHA --> RLD
-  RLD -.->|next model call uses expanded tools| LOOP
-  LOOP -->|final reply| TG
+  RLD -.->|next LLM iteration uses expanded ha_* tools| LLM
+
+  OUT --> TG
 ```
 
 **Modes**
