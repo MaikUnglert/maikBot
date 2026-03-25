@@ -21,7 +21,7 @@ export interface ToolExecResult {
   output: string;
 }
 
-interface RegisteredTool {
+export interface RegisteredTool {
   definition: ToolDefinition;
   execute: (args: Record<string, unknown>) => Promise<ToolExecResult>;
 }
@@ -156,7 +156,9 @@ export class ToolRegistry {
    */
   async loadTools(
     allowedNames?: Set<string>,
-    context?: LoadToolsContext
+    context?: LoadToolsContext,
+    /** Merged after built-ins; names may override. Used for runtime-only tools (e.g. load_ha_tool_categories). */
+    extraTools?: RegisteredTool[]
   ): Promise<{
     definitions: ToolDefinition[];
     dispatch: Map<string, (args: Record<string, unknown>) => Promise<ToolExecResult>>;
@@ -269,6 +271,15 @@ export class ToolRegistry {
       (!allowedNames || [...scanToolNames].some((n) => allowedNames.has(n))) && context?.sessionId;
     if (needsScan && context) {
       for (const tool of getScanTools(context.sessionId)) {
+        const name = tool.definition.function.name;
+        if (allowedNames && !allowedNames.has(name)) continue;
+        definitions.push(tool.definition);
+        dispatch.set(name, tool.execute);
+      }
+    }
+
+    if (extraTools?.length) {
+      for (const tool of extraTools) {
         const name = tool.definition.function.name;
         if (allowedNames && !allowedNames.has(name)) continue;
         definitions.push(tool.definition);
