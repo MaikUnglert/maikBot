@@ -6,28 +6,26 @@ AI assistant via Telegram (and optional WhatsApp). LLM: Gemini, Ollama, or NVIDI
 
 High-level request flow: the channel layer forwards text to the assistant, which runs a **tool loop** against the configured LLM. **Home Assistant** capabilities are split into a **base** set (search, state, simple control) and **on-demand** categories; the model can call `load_ha_tool_categories` mid-turn to attach more `ha_*` MCP tools before the next iteration. Built-in tools (shell, Gemini CLI, browser, schedule, scan, …) are loaded according to the same allowlist. Slash commands such as `/update` are handled **before** the tool loop.
 
-**Mermaid source file:** [`docs/diagrams/assistant-architecture.mmd`](docs/diagrams/assistant-architecture.mmd) (open in [Mermaid Live Editor](https://mermaid.live) or any Mermaid-compatible preview). The same diagram is embedded below for GitHub.
-
 ```mermaid
 flowchart TB
-  subgraph channels["Channels"]
-    TG["Telegram / WhatsApp"]
+  subgraph channels [Channels]
+    TG[Telegram / WhatsApp]
   end
 
-  subgraph pipeline["Assistant pipeline"]
-    H["handleTextWithTrace"]
-    SL["Slash commands (/update, /clear, …)"]
-    FP{"HA or URL fast path?"}
-    REG["Build allowed tool set + registry"]
-    LOOP["Tool loop: LLM calls and tool results"]
-    LHA["load_ha_tool_categories"]
-    RLD["Reload tools from registry"]
+  subgraph pipeline [Assistant pipeline]
+    H[handleTextWithTrace]
+    SL[Slash commands: /update, /clear, …]
+    FP{HA or URL fast path?}
+    REG[Build allowed tool set + registry]
+    LOOP[Tool loop: LLM calls and tool results]
+    LHA[load_ha_tool_categories]
+    RLD[Reload tools from registry]
   end
 
-  subgraph providers["Backends"]
-    LLM["LLM: Gemini / Ollama / NVIDIA"]
-    MCP["MCP: Home Assistant"]
-    EXT["Built-in: shell, browser, schedule, Gemini CLI, …"]
+  subgraph providers [Backends]
+    LLM[LLM: Gemini / Ollama / NVIDIA]
+    MCP[MCP: Home Assistant]
+    EXT[Built-in: shell, browser, schedule, Gemini CLI, …]
   end
 
   TG --> H
@@ -41,7 +39,7 @@ flowchart TB
   LOOP --> EXT
   LOOP --> LHA
   LHA --> RLD
-  RLD -.->|"next model call: expanded tools"| LOOP
+  RLD -.->|next model call uses expanded tools| LOOP
   LOOP -->|final reply| TG
 ```
 
