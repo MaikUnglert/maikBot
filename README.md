@@ -75,6 +75,55 @@ The **HA MCP server** is not part of Home Assistant core; run it yourself. A typ
 
 If an old `.env` still sets `LLM_SKIP_TRIAGE`, it is **ignored**; the backend logs a one-line deprecation warning at startup.
 
+## Tools
+
+Every message goes through a **two-layer tool scheme**: a fixed set of tools is always available, and additional Home Assistant capability can be loaded on demand mid-turn.
+
+### Always-loaded tools
+
+These tools are **available from the very first LLM call**, regardless of what the user wrote:
+
+| Category | ID | Tools |
+|----------|----|-------|
+| **Shell & Files** | `shell` | `shell_exec`, `shell_job_result`, `maikbot_self_update` |
+| **Browser** | `browser` | `browser_navigate`, `browser_snapshot`, `browser_screenshot`, `browser_screenshot_analyze`, `browser_click`, `browser_type`, `browser_close` |
+| **Vision** | `vision` | `vision_analyze_image` |
+| **Reminders & Scheduling** | `schedule` | `schedule_reminder`, `schedule_daily`, `schedule_weekly`, `schedule_list`, `schedule_cancel` |
+| **Gemini CLI** | `gemini_cli` | `gemini_cli_delegate`, `gemini_cli_status` |
+| **Agent self-config** | `agent` | `agent_config_get`, `agent_config_set` |
+| **Document scan** | `scan` | `scan_add_page`, `scan_status`, `scan_cancel` |
+| **HA Search & State** | `search` | `ha_search_entities`, `ha_deep_search`, `ha_get_state`, `ha_get_states`, `ha_get_overview`, `ha_get_entity`, `ha_get_device`, `ha_list_services` |
+| **HA Device Control** | `control` | `ha_call_service`, `ha_bulk_control`, `ha_get_operation_status`, `ha_get_bulk_status` |
+
+> **Note:** The `browser` category is always declared in the schema, but actually navigating requires `BROWSER_ENABLED=true` + Playwright installed.
+
+### On-demand Home Assistant categories
+
+Heavier HA capabilities are **not loaded at start**. The model calls `load_ha_tool_categories` mid-turn with one or more category IDs; the tool registry is then reloaded so the next LLM iteration sees the expanded `ha_*` tools:
+
+| Category | ID | What it adds |
+|----------|----|-------------|
+| **Automations & Scripts** | `automation` | `ha_config_get_automation`, `ha_config_set_automation`, `ha_config_remove_automation`, `ha_get_automation_traces`, `ha_config_get_script`, `ha_config_set_script`, `ha_config_remove_script`, `ha_get_blueprint`, `ha_import_blueprint` |
+| **Configuration** | `config` | Areas, floors, groups, labels, helpers, zones, entities, integrations — 24 `ha_config_*` / `ha_*` tools |
+| **Dashboards** | `dashboard` | `ha_config_get_dashboard`, `ha_config_set_dashboard`, `ha_config_delete_dashboard`, `ha_dashboard_find_card`, `ha_get_dashboard_guide`, `ha_get_card_documentation`, + resource tools |
+| **History & Monitoring** | `history` | `ha_get_history`, `ha_get_statistics`, `ha_get_logbook`, `ha_get_camera_image` |
+| **Calendar & Todos** | `calendar` | `ha_config_get_calendar_events`, `ha_config_set_calendar_event`, `ha_config_remove_calendar_event`, `ha_get_todo`, `ha_add_todo_item`, `ha_update_todo_item`, `ha_remove_todo_item` |
+| **System & Maintenance** | `system` | `ha_get_system_health`, `ha_check_config`, `ha_restart`, `ha_reload_core`, `ha_get_updates`, `ha_get_addon`, `ha_backup_create`, `ha_backup_restore`, `ha_eval_template`, `ha_get_domain_docs`, `ha_update_device`, `ha_remove_device`, `ha_report_issue` |
+| **HACS** | `hacs` | `ha_hacs_search`, `ha_hacs_info`, `ha_hacs_list_installed`, `ha_hacs_repository_info`, `ha_hacs_add_repository`, `ha_hacs_download` |
+
+The model can pass **multiple IDs at once** to `load_ha_tool_categories` (e.g. `["automation", "config"]`).
+
+### Fast paths
+
+Two pattern-based shortcuts skip the default tool selection before the first LLM call:
+
+| Fast path | Trigger condition | Initial tool set |
+|-----------|------------------|-----------------|
+| **HA fast path** (`LLM_HA_FAST_PATH=true`) | Short on/off-style phrase, ≤ 200 chars — e.g. *"mach das Licht an"*, *"turn off the fan"*, *"toggle kitchen lamp"* | Always-loaded + **`search`** + **`control`** only |
+| **URL fast path** | Message contains a URL (`https://…`) or web keywords (*website*, *webseite*, *öffne die Seite*, …), ≤ 500 chars | Always-loaded + **`browser`** |
+
+In all cases `load_ha_tool_categories` is available so the model can still pull in any on-demand category when it needs it.
+
 ## Quick Start
 
 ```bash
