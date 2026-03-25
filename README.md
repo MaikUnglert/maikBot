@@ -1,6 +1,6 @@
 # maikBot
 
-AI assistant via Telegram (and optional WhatsApp). LLM: Gemini, Ollama, or NVIDIA NIM. Tools: MCP (Home Assistant), shell, browser, scheduling.
+AI assistant via Telegram (and optional WhatsApp). LLM: Gemini, Ollama, or NVIDIA NIM. Tools: MCP for Home Assistant (e.g. community server **[ha-mcp](https://github.com/homeassistant-ai/ha-mcp)**), shell, browser, scheduling.
 
 ## Architecture
 
@@ -37,7 +37,7 @@ flowchart TB
   end
 
   subgraph backends [Backends invoked by EXEC]
-    MCP[MCP: Home Assistant]
+    MCP[HA MCP server<br/>e.g. ha-mcp]
     EXT[Built-in: shell, schedule, Gemini CLI, scan, …]
     LHA[load_ha_tool_categories]
     RLD[Reload tool schema from registry]
@@ -63,6 +63,8 @@ flowchart TB
 
   OUT --> TG
 ```
+
+The **HA MCP server** is not part of Home Assistant core; run it yourself. A typical setup uses [https://github.com/homeassistant-ai/ha-mcp](https://github.com/homeassistant-ai/ha-mcp).
 
 **Modes**
 
@@ -106,6 +108,14 @@ Without `--install` the script only shows the service file. Logs: `journalctl -u
 | `/mcp tools` | List MCP tools |
 | `/scan` | Scan document (see Scan → Paperless below) |
 
+## Home Assistant MCP
+
+Home Assistant does **not** ship an official MCP server inside core. maikBot expects a **separate** MCP server that exposes Home Assistant as tools (the `ha_*` calls in the architecture diagram). That server is a **community / third-party** project you run yourself (container, add-on, or local process).
+
+A common choice is **[homeassistant-ai/ha-mcp](https://github.com/homeassistant-ai/ha-mcp)** (unofficial; not affiliated with the core HA project). Other MCP implementations for Home Assistant exist; maikBot only needs a reachable MCP HTTP(S) endpoint and compatible tool names.
+
+Configure the endpoint in `.env` via **`MCP_SERVERS_JSON`** (preferred) or the legacy **`HA_MCP_BASE_URL`** + **`HA_MCP_API_KEY`** pair—see `backend/.env.example`.
+
 ## Self-update & Self-improvement
 
 Chat history is persisted to disk (`data/chat-sessions/`) and survives restarts.
@@ -129,6 +139,7 @@ When you ask the bot to work on an external repo (e.g. "clone X and add feature 
 - `TELEGRAM_BOT_TOKEN` — @BotFather
 - `ALLOWED_TELEGRAM_USER_IDS` — your Telegram ID
 - `GEMINI_API_KEY` — [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — or `OLLAMA_BASE_URL` for local Ollama — or `NVIDIA_API_KEY` for [NVIDIA NIM](https://build.nvidia.com)
+- Home Assistant MCP — run a server such as [https://github.com/homeassistant-ai/ha-mcp](https://github.com/homeassistant-ai/ha-mcp), then set `MCP_SERVERS_JSON` or `HA_MCP_BASE_URL` / `HA_MCP_API_KEY`
 
 See `backend/.env.example` for full options.
 
