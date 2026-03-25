@@ -519,6 +519,7 @@ export function startTelegramBot(): TelegramBot {
     { command: 'status', description: 'Show session status' },
     { command: 'scan', description: 'Scan document, /scan done, /scan cancel' },
     { command: 'mcp', description: 'List MCP tools (e.g. /mcp tools)' },
+    { command: 'night', description: 'Turn off all lights and enable night mode' },
   ]).catch((err) => logger.error({ err }, 'Failed to set Telegram commands'));
 
   bot.on('callback_query', async (query: CallbackQuery) => {
