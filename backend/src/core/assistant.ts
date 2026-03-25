@@ -355,7 +355,7 @@ export class Assistant {
       trace.push('action: night_mode');
       const feedback: string[] = ['Turning off all lights and enabling night mode.'];
       try {
-        await mcpHostService.runTool('ha_call_service', {
+        await mcpHostService.callTool('ha_call_service', {
           domain: 'light',
           service: 'turn_off',
           service_data: {},
@@ -368,15 +368,15 @@ export class Assistant {
       }
 
       try {
-        await mcpHostService.runTool('ha_call_service', {
-          domain: 'script',
+        await mcpHostService.callTool('ha_call_service', {
+          domain: 'input_boolean',
           service: 'turn_on',
-          service_data: { entity_id: 'script.night_mode' },
+          service_data: { entity_id: 'input_boolean.nachtmodus' },
         });
         feedback.push('Night mode enabled.');
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        feedback.push(`Failed to enable night mode: ${errMsg}. If "script.night_mode" does not exist, consider creating it in Home Assistant.`);
+        feedback.push(`Failed to enable night mode: ${errMsg}. If "input_boolean.nachtmodus" does not exist, consider creating it in Home Assistant.`);
         logger.error({ err: error }, 'Failed to enable night mode');
       }
 
