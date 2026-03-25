@@ -1,0 +1,37 @@
+%% maikBot — assistant request flow (Mermaid source)
+%% Render: paste into https://mermaid.live or use Mermaid-capable Markdown preview
+
+flowchart TB
+  subgraph channels["Channels"]
+    TG["Telegram / WhatsApp"]
+  end
+
+  subgraph pipeline["Assistant pipeline"]
+    H["handleTextWithTrace"]
+    SL["Slash commands (/update, /clear, …)"]
+    FP{"HA or URL fast path?"}
+    REG["Build allowed tool set + registry"]
+    LOOP["Tool loop: LLM calls and tool results"]
+    LHA["load_ha_tool_categories"]
+    RLD["Reload tools from registry"]
+  end
+
+  subgraph providers["Backends"]
+    LLM["LLM: Gemini / Ollama / NVIDIA"]
+    MCP["MCP: Home Assistant"]
+    EXT["Built-in: shell, browser, schedule, Gemini CLI, …"]
+  end
+
+  TG --> H
+  H --> SL
+  SL -->|matched| TG
+  H --> FP
+  FP --> REG
+  REG --> LOOP
+  LOOP <--> LLM
+  LOOP --> MCP
+  LOOP --> EXT
+  LOOP --> LHA
+  LHA --> RLD
+  RLD -.->|"next model call: expanded tools"| LOOP
+  LOOP -->|final reply| TG
