@@ -161,8 +161,11 @@ Rules:
 15) Scan: When the user asks to scan at the printer (e.g. "scanne am Drucker", "scan document"), use scan_add_page. For more pages they can say "noch eine Seite" or "weiter"; for the PDF they say "fertig" or "done".`;
 }
 
-const TRIAGE_SYSTEM_PROMPT = `You are MaikBot. The agent ALWAYS has: shell, browser, vision, schedule, gemini_cli, agent config, and Home Assistant search + control (search entities, turn on/off, get state).
-Your job: decide if the user needs ADDITIONAL Home Assistant categories. Call route_to_tools only when they need:
+const TRIAGE_SYSTEM_PROMPT = `You are MaikBot triage: routing ONLY. A second agent step runs immediately after you and produces EVERY user-visible reply. You must NEVER send conversational text, explanations, or refusals to the user—no message body. If you output text, it is discarded.
+
+The main agent ALWAYS has: shell, browser, vision, schedule, gemini_cli, agent config, and Home Assistant search + control (search entities, turn on/off, get state).
+
+Your ONLY job: decide if the user needs ADDITIONAL Home Assistant categories. Call route_to_tools only when they need:
 - automation (create/edit automations, scripts)
 - config (areas, groups, helpers, zones, integrations)
 - dashboard (edit dashboards, cards)
@@ -174,13 +177,10 @@ Your job: decide if the user needs ADDITIONAL Home Assistant categories. Call ro
 Additional categories (add only when needed):
 ${buildTriageCategoryListForPrompt()}
 
-If the user needs one or more of the above, call route_to_tools with those category IDs.
-If the user's request can be handled with the base tools (search, control, shell, browser) or needs no tools, just reply with text—do NOT call route_to_tools.
-IMPORTANT: Only call route_to_tools when they explicitly need automation, config, dashboard, history, calendar, system, or hacs.
+If they need one or more of the above, call route_to_tools with those category IDs.
+If they do NOT need any of these, do NOT call route_to_tools. Respond with empty content (no assistant message text).
 
-MaikBot self-modification: If the user asks to improve, change, or extend maikBot itself (own code, system prompts, chat commands, slash handlers, bot behavior, "edit yourself", "add /night", self-improve via Gemini CLI), do NOT answer with text—do NOT explain that the assistant cannot change its internals or that only Telegram/Discord/etc. can add commands. That would block the real agent, which has shell and gemini_cli. Reply with empty content (no message body) and do NOT call route_to_tools.
-
-Respond in English unless the user explicitly asks for another language.`;
+IMPORTANT: Only call route_to_tools when they explicitly need automation, config, dashboard, history, calendar, system, or hacs.`;
 
 const ROUTE_TOOL_DEFINITION: ToolDefinition = {
   type: 'function',
@@ -457,16 +457,8 @@ export class Assistant {
           if (pendingSaveConfirmation) {
             trace.push('phase: save_confirmation_force_shell');
             selectedCategories = ['shell'];
-          } else if (selectedCategories.length === 0 && triageResult.content) {
-            trace.push('phase: triage_direct_answer');
-            await report('Writing reply…');
-            const reply = triageResult.content;
-            const { imageAttachment: _img, ...userMsgRest } = currentUserMessage;
-            chatHistory.append(sessionId, [
-              userMsgRest as LlmMessage,
-              { role: 'assistant', content: reply },
-            ]);
-            return { reply, trace };
+          } else if (selectedCategories.length === 0 && (triageResult.content ?? '').trim()) {
+            trace.push('phase: triage_had_text_ignored → phase2');
           }
 
           if (selectedCategories.length === 0) {
