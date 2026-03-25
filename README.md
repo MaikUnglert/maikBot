@@ -2,6 +2,55 @@
 
 AI assistant via Telegram (and optional WhatsApp). LLM: Gemini, Ollama, or NVIDIA NIM. Tools: MCP (Home Assistant), shell, browser, scheduling.
 
+## Architecture
+
+High-level request flow: the channel layer forwards text to the assistant, which runs a **tool loop** against the configured LLM. **Home Assistant** capabilities are split into a **base** set (search, state, simple control) and **on-demand** categories; the model can call `load_ha_tool_categories` mid-turn to attach more `ha_*` MCP tools before the next iteration. Built-in tools (shell, Gemini CLI, browser, schedule, scan, …) are loaded according to the same allowlist. Slash commands such as `/update` are handled **before** the tool loop.
+
+```mermaid
+flowchart TB
+  subgraph channels [Channels]
+    TG[Telegram / WhatsApp]
+  end
+
+  subgraph pipeline [Assistant pipeline]
+    H[handleTextWithTrace]
+    SL[Slash commands: /update, /clear, …]
+    FP{HA or URL fast path?}
+    REG[Build allowed tool set + registry]
+    LOOP[Tool loop: LLM calls and tool results]
+    LHA[load_ha_tool_categories]
+    RLD[Reload tools from registry]
+  end
+
+  subgraph providers [Backends]
+    LLM[LLM: Gemini / Ollama / NVIDIA]
+    MCP[MCP: Home Assistant]
+    EXT[Built-in: shell, browser, schedule, Gemini CLI, …]
+  end
+
+  TG --> H
+  H --> SL
+  SL -->|matched| TG
+  H --> FP
+  FP --> REG
+  REG --> LOOP
+  LOOP <--> LLM
+  LOOP --> MCP
+  LOOP --> EXT
+  LOOP --> LHA
+  LHA --> RLD
+  RLD -.->|next model call uses expanded tools| LOOP
+  LOOP -->|final reply| TG
+```
+
+**Modes**
+
+| Setting | Effect |
+|---------|--------|
+| Default | Base tools + HA search/control + `load_ha_tool_categories` for deeper HA (automation, dashboards, history, …). Fewer MCP tools in the schema until the model loads them. |
+| `LLM_SKIP_TRIAGE=true` | Misleading name kept for compatibility: loads **all** tool categories on every message (largest schema). No `load_ha_tool_categories` step. |
+| `LLM_HA_FAST_PATH=true` | Short on/off-style phrases start with only HA **search** + **control**; the model can still call `load_ha_tool_categories` if it needs more. |
+
 ## Quick Start
 
 ```bash
