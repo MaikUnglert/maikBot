@@ -203,8 +203,8 @@ export const TOOL_CATEGORIES: ToolCategory[] = [
   },
 ];
 
-/** HA categories that are loaded on demand via triage (not in base). */
-export const TRIAGE_HA_CATEGORY_IDS = [
+/** HA categories not in the base tool set; loaded via load_ha_tool_categories when needed. */
+export const ON_DEMAND_HA_CATEGORY_IDS = [
   'automation',
   'config',
   'dashboard',
@@ -213,6 +213,9 @@ export const TRIAGE_HA_CATEGORY_IDS = [
   'system',
   'hacs',
 ] as const;
+
+/** @deprecated Use ON_DEMAND_HA_CATEGORY_IDS */
+export const TRIAGE_HA_CATEGORY_IDS = ON_DEMAND_HA_CATEGORY_IDS;
 
 /** Tools always loaded (no triage). Includes: shell, browser, vision, schedule, gemini_cli, agent, scan (if enabled), HA search + control. */
 export function getAlwaysLoadedToolNames(): Set<string> {
@@ -249,12 +252,17 @@ export function buildCategoryListForPrompt(): string {
   ).join('\n');
 }
 
-/** Category list for triage: only on-demand HA categories. Base tools are always loaded. */
-export function buildTriageCategoryListForPrompt(): string {
-  return TRIAGE_HA_CATEGORY_IDS.map((id) => {
+/** Category list for prompts: on-demand HA categories (base HA search/control always loaded). */
+export function buildOnDemandHaCategoryListForPrompt(): string {
+  return ON_DEMAND_HA_CATEGORY_IDS.map((id) => {
     const cat = TOOL_CATEGORIES.find((c) => c.id === id);
     return cat ? `- "${cat.id}": ${cat.description}` : null;
   })
     .filter(Boolean)
     .join('\n');
+}
+
+/** @deprecated Use buildOnDemandHaCategoryListForPrompt */
+export function buildTriageCategoryListForPrompt(): string {
+  return buildOnDemandHaCategoryListForPrompt();
 }

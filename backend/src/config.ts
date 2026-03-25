@@ -42,9 +42,7 @@ const envSchema = z.object({
   LLM_MAX_TOOL_CALLS: z.coerce.number().int().min(0).default(0),
   SHELL_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   TELEGRAM_SHOW_AGENT_TRACE: booleanString.default('false'),
-  /** Skip triage LLM call; load all tool categories in one phase (fewer API calls, larger tool schema). */
-  LLM_SKIP_TRIAGE: booleanString.default('false'),
-  /** Heuristic: short on/off-style commands skip triage and use search+control only (saves 1 call + smaller schema). */
+  /** Heuristic: short on/off-style phrasing uses only search+control HA tools until load_ha_tool_categories is called. */
   LLM_HA_FAST_PATH: booleanString.default('true'),
 
   /** Directory for domain memory files (*.md), e.g. entity nicknames. Default: <cwd>/data/memory */
@@ -133,6 +131,12 @@ if (!parsedEnv.success) {
 }
 
 const env = parsedEnv.data;
+
+if (process.env.LLM_SKIP_TRIAGE !== undefined && String(process.env.LLM_SKIP_TRIAGE).trim() !== '') {
+  console.warn(
+    '[maikbot] LLM_SKIP_TRIAGE is deprecated and ignored; remove it from .env. Extra Home Assistant tools load via load_ha_tool_categories (see README Architecture).'
+  );
+}
 
 const allowedUserIds = env.ALLOWED_TELEGRAM_USER_IDS
   .split(',')
@@ -316,7 +320,6 @@ export const config = {
   llmMaxToolCalls: env.LLM_MAX_TOOL_CALLS,
   shellTimeoutMs: env.SHELL_TIMEOUT_MS,
   telegramShowAgentTrace: env.TELEGRAM_SHOW_AGENT_TRACE,
-  llmSkipTriage: env.LLM_SKIP_TRIAGE,
   llmHaFastPath: env.LLM_HA_FAST_PATH,
   memoryDataDir: resolveMemoryDataDir(env.MEMORY_DATA_DIR),
   heartbeatActiveIntervalSec: env.HEARTBEAT_ACTIVE_INTERVAL_SEC,

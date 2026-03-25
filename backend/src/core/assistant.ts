@@ -3,17 +3,15 @@ import { llmService } from '../services/llm.service.js';
 import { mcpHostService } from '../services/mcp-host.service.js';
 import { performUpdate } from '../services/update.service.js';
 import { sendToSession } from '../services/channel-sender.service.js';
-import { toolRegistry } from './tool-registry.js';
+import { toolRegistry, type RegisteredTool } from './tool-registry.js';
 import { chatHistory } from './chat-history.js';
 import { config, type LlmProviderName } from '../config.js';
 import { logger } from '../logger.js';
 import {
-  TOOL_CATEGORIES,
-  TRIAGE_HA_CATEGORY_IDS,
-  getCategoryIds,
+  ON_DEMAND_HA_CATEGORY_IDS,
   getToolsForCategories,
   getAlwaysLoadedToolNames,
-  buildTriageCategoryListForPrompt,
+  buildOnDemandHaCategoryListForPrompt,
 } from './tool-categories.js';
 import type { LlmMessage, ToolDefinition } from '../services/llm.types.js';
 import { readMemory } from './tools/memory.js';
@@ -30,7 +28,7 @@ function truncateToolOutput(output: string): string {
 }
 
 /**
- * Detect typical Home Assistant on/off / toggle phrasing (DE/EN) to skip the triage LLM call.
+ * Detect typical Home Assistant on/off / toggle phrasing (DE/EN) to use a smaller HA tool set without on-demand categories.
  * Conservative: long lines and slash-commands never match.
  */
 function tryHaFastPathCategories(text: string): string[] | null {
@@ -148,6 +146,9 @@ Rules:
 2) You have access to tools (smart home, shell, browser, etc.). Use them when the user's request requires it.${browserNote}${visionNote}
 3) Do not invent tool results or device states. Only report what tools return.
 4) If a tool call fails with a name/match error, call ha_search_entities or ha_deep_search first to discover the correct entity names, then retry with the correct name. Do NOT give up after the first failed attempt.
+4a) On-demand Home Assistant tools: You start with entity search, state reads, and device control (turn on/off, services). For automations/scripts, areas/helpers/config, dashboards, history/logbook/camera, calendar/todos, HA system maintenance (restart, backups, updates), or HACS, call load_ha_tool_categories first with the relevant category IDs (you can pass several at once). After it succeeds, the matching ha_* tools become available for the rest of this turn. If you need a capability and get "tool is not available" or similar, call load_ha_tool_categories for the right categories and retry.
+Categories (IDs for load_ha_tool_categories):
+${buildOnDemandHaCategoryListForPrompt()}
 5) For shell commands, prefer concise output (e.g. use flags like -h, --no-pager, head/tail). For long-running commands (npm install, large downloads), use shell_exec with async=true and shell_job_result to fetch output when done.
 6) On errors, provide concrete next steps.
 7) File operations: Use shell_exec to read, write, and edit files. You can read (cat), append (echo ... >>), or edit with sed.
@@ -156,35 +157,17 @@ Rules:
 10) For reminders ("remind me in X"), daily tasks ("weather every morning at 10"), or weekly tasks ("every Monday at 9am weekly recap"), use schedule_reminder, schedule_daily, or schedule_weekly.
 11) For larger coding tasks (multi-file refactors, complex features), use gemini_cli_delegate. Do not use shell_exec for long-running gemini commands. When the user wants to iterate on a previous Gemini result (e.g. "change that to X", "fix the bug you introduced", "use approach Y instead"), use gemini_cli_delegate with continue_session=true so Gemini continues in the same session with full context.
 12) Self-update: When the user asks you to update yourself (e.g. "update dich", "aktualisiere dich", "pull latest code"), use maikbot_self_update with mode="full". For rebuild-only after Gemini CLI changes, use mode="local". The bot will restart automatically.
-13) Self-improvement: When the user asks you to improve yourself, add a feature, or fix your own code, use gemini_cli_delegate. The task must instruct Gemini to: (1) create a feature branch (e.g. feature/self-improvement-YYYYMMDD-short-description), (2) make the changes, (3) commit, (4) push to origin, (5) open a PR with gh pr create. Never commit to main. After the user merges the PR, they run /update to pull and restart.
+13) Self-improvement and changing your own behavior: You run on a server with full tool access. You CAN change maikBot source code, prompts, Telegram/WhatsApp command handling, and add new slash-style commands (e.g. handlers in assistant.ts and telegram-bot.service.ts, setMyCommands, /info text). Never tell the user you cannot modify your "internal" logic or that only an external chat platform can add commands—that is false for this deployment. For substantive edits (new features, multi-file changes), use gemini_cli_delegate so Gemini CLI edits the repo; you may also use shell_exec for small, local patches. After local code changes, tell the user to run /reload (or merge PR then /update as below). The delegated task should instruct Gemini to: (1) create a feature branch (e.g. feature/self-improvement-YYYYMMDD-short-description), (2) make the changes, (3) commit, (4) push to origin, (5) open a PR with gh pr create. Never commit to main. After the user merges the PR, they run /update to pull and restart.
 14) External repos: When the user asks you to work on an external git repo, clone it into the git repos workspace (see above), then use gemini_cli_delegate with workspace pointing to the cloned folder.
 15) Scan: When the user asks to scan at the printer (e.g. "scanne am Drucker", "scan document"), use scan_add_page. For more pages they can say "noch eine Seite" or "weiter"; for the PDF they say "fertig" or "done".`;
 }
 
-const TRIAGE_SYSTEM_PROMPT = `You are MaikBot. The agent ALWAYS has: shell, browser, vision, schedule, gemini_cli, agent config, and Home Assistant search + control (search entities, turn on/off, get state).
-Your job: decide if the user needs ADDITIONAL Home Assistant categories. Call route_to_tools only when they need:
-- automation (create/edit automations, scripts)
-- config (areas, groups, helpers, zones, integrations)
-- dashboard (edit dashboards, cards)
-- history (sensor history, statistics, logbook, camera)
-- calendar (calendar events, todos)
-- system (restart, backups, updates, add-ons)
-- hacs (HACS integrations)
-
-Additional categories (add only when needed):
-${buildTriageCategoryListForPrompt()}
-
-If the user needs one or more of the above, call route_to_tools with those category IDs.
-If the user's request can be handled with the base tools (search, control, shell, browser) or needs no tools, just reply with text—do NOT call route_to_tools.
-IMPORTANT: Only call route_to_tools when they explicitly need automation, config, dashboard, history, calendar, system, or hacs.
-Respond in English unless the user explicitly asks for another language.`;
-
-const ROUTE_TOOL_DEFINITION: ToolDefinition = {
+const LOAD_HA_TOOL_CATEGORIES_DEFINITION: ToolDefinition = {
   type: 'function',
   function: {
-    name: 'route_to_tools',
+    name: 'load_ha_tool_categories',
     description:
-      'Add Home Assistant categories: automation, config, dashboard, history, calendar, system, hacs. Call only when the user needs these specific capabilities.',
+      'Load extra Home Assistant MCP tools for this conversation turn. Base tools already include entity search, state, and device control. Call this when the user needs automations/scripts, full config (areas, helpers, integrations), dashboards, history/logbook/camera, calendar/todos, HA system ops (restart, backups, updates), or HACS. You can pass multiple category IDs at once. Safe to call again with new IDs; already-loaded categories are no-ops.',
     parameters: {
       type: 'object',
       required: ['categories'],
@@ -193,9 +176,10 @@ const ROUTE_TOOL_DEFINITION: ToolDefinition = {
           type: 'array',
           items: {
             type: 'string',
-            enum: [...TRIAGE_HA_CATEGORY_IDS],
+            enum: [...ON_DEMAND_HA_CATEGORY_IDS],
           },
-          description: 'Additional HA category IDs to load (automation, config, dashboard, history, calendar, system, hacs)',
+          description:
+            'Category IDs to load: automation, config, dashboard, history, calendar, system, hacs',
         },
       },
     },
@@ -393,97 +377,110 @@ export class Assistant {
     try {
       await report('Preparing…');
       let selectedCategories: string[] = [];
+      let includeLoadHaTool = false;
 
-      if (config.llmSkipTriage) {
-        trace.push('phase: skip_triage_all_categories');
-        await report('Loading tools (full catalog)…');
-        selectedCategories = [...getCategoryIds()];
+      const fastCats = tryHaFastPathCategories(trimmed);
+      const urlCats = tryUrlFastPathCategories(trimmed);
+      if (fastCats) {
+        trace.push(`phase: ha_fast_path → [${fastCats.join(', ')}]`);
+        await report('Quick path: device search & control…');
+        selectedCategories = fastCats;
+        includeLoadHaTool = true;
+      } else if (urlCats) {
+        trace.push(`phase: url_fast_path → [${urlCats.join(', ')}]`);
+        await report('Loading browser tools…');
+        selectedCategories = urlCats;
+        includeLoadHaTool = true;
       } else {
-        const fastCats = tryHaFastPathCategories(trimmed);
-        const urlCats = tryUrlFastPathCategories(trimmed);
-        if (fastCats) {
-          trace.push(`phase: ha_fast_path → [${fastCats.join(', ')}]`);
-          await report('Quick path: device search & control…');
-          selectedCategories = fastCats;
-        } else if (urlCats) {
-          trace.push(`phase: url_fast_path → [${urlCats.join(', ')}]`);
-          await report('Loading browser tools…');
-          selectedCategories = urlCats;
-        } else {
-          await report('Routing your request…');
-          const triageMessages: LlmMessage[] = [
-            { role: 'system', content: TRIAGE_SYSTEM_PROMPT },
-            ...history,
-            currentUserMessage,
-          ];
+        trace.push('phase: base_tools_plus_load_ha');
+        includeLoadHaTool = true;
+      }
 
-          const triageResult = await llmService.chat(triageMessages, [ROUTE_TOOL_DEFINITION]);
+      const pendingSaveConfirmation =
+        selectedCategories.length === 0 &&
+        looksLikeSaveConfirmation(trimmed) &&
+        lastAssistantAskedToSave(history);
 
-          const routeCall = triageResult.toolCalls.find(
-            (tc) => tc.function.name === 'route_to_tools'
-          );
+      if (pendingSaveConfirmation) {
+        trace.push('phase: save_confirmation_force_shell');
+        selectedCategories = ['shell'];
+      }
 
-          if (routeCall) {
-            const args = routeCall.function.arguments as { categories?: unknown };
-            let cats: string[] = [];
-            if (Array.isArray(args.categories)) {
-              cats = args.categories as string[];
-            } else if (typeof args.categories === 'string') {
-              cats = [args.categories];
-            }
-            selectedCategories = cats.filter((id) =>
-              TOOL_CATEGORIES.some((c) => c.id === id)
-            );
-          }
+      const loadedHaCategories = new Set(
+        selectedCategories.filter((id) =>
+          (ON_DEMAND_HA_CATEGORY_IDS as readonly string[]).includes(id)
+        )
+      );
 
-          const isExplicitlyEmpty =
-            routeCall &&
-            Array.isArray((routeCall.function.arguments as { categories?: unknown }).categories) &&
-            ((routeCall.function.arguments as { categories: unknown[] }).categories.length === 0);
-
-          if (selectedCategories.length === 0 && triageResult.toolCalls.length > 0 && !isExplicitlyEmpty) {
-            trace.push('phase: triage_fallback_all_categories');
-            selectedCategories = getCategoryIds();
-          }
-
-          const pendingSaveConfirmation =
-            selectedCategories.length === 0 &&
-            looksLikeSaveConfirmation(trimmed) &&
-            lastAssistantAskedToSave(history);
-
-          if (pendingSaveConfirmation) {
-            trace.push('phase: save_confirmation_force_shell');
-            selectedCategories = ['shell'];
-          } else if (selectedCategories.length === 0 && triageResult.content) {
-            trace.push('phase: triage_direct_answer');
-            await report('Writing reply…');
-            const reply = triageResult.content;
-            const { imageAttachment: _img, ...userMsgRest } = currentUserMessage;
-            chatHistory.append(sessionId, [
-              userMsgRest as LlmMessage,
-              { role: 'assistant', content: reply },
-            ]);
-            return { reply, trace };
-          }
-
-          if (selectedCategories.length === 0) {
-            trace.push('phase: triage_empty_fallback_to_phase2');
-          } else {
-            trace.push(`phase: routed → [${selectedCategories.join(', ')}]`);
+      const buildAllowedToolNames = (): Set<string> => {
+        const names = new Set(getAlwaysLoadedToolNames());
+        for (const n of getToolsForCategories(selectedCategories)) {
+          names.add(n);
+        }
+        for (const id of loadedHaCategories) {
+          for (const n of getToolsForCategories([id])) {
+            names.add(n);
           }
         }
-      }
+        if (includeLoadHaTool) {
+          names.add('load_ha_tool_categories');
+        }
+        return names;
+      };
 
-      // --- Phase 2: Load tools (base always + triage HA on demand) ---
+      const executeLoadHaTool = async (
+        args: Record<string, unknown>
+      ): Promise<{ ok: boolean; output: string }> => {
+        const raw = args.categories;
+        let requested: string[] = [];
+        if (Array.isArray(raw)) {
+          requested = raw.filter((x) => typeof x === 'string') as string[];
+        } else if (typeof raw === 'string') {
+          requested = [raw];
+        }
+        const valid = new Set<string>(ON_DEMAND_HA_CATEGORY_IDS as unknown as string[]);
+        const added: string[] = [];
+        const unknown: string[] = [];
+        for (const id of requested) {
+          if (valid.has(id)) {
+            if (!loadedHaCategories.has(id)) {
+              loadedHaCategories.add(id);
+              added.push(id);
+            }
+          } else if (id.trim()) {
+            unknown.push(id);
+          }
+        }
+        const parts: string[] = [];
+        if (added.length > 0) {
+          parts.push(`Loaded HA tool categories: ${added.join(', ')}. Matching ha_* tools are now available.`);
+        } else if (requested.length === 0) {
+          parts.push('No categories provided. Pass categories: automation, config, dashboard, history, calendar, system, and/or hacs.');
+        } else {
+          parts.push('All requested categories were already loaded (or only invalid IDs were given).');
+        }
+        if (unknown.length > 0) {
+          parts.push(`Ignored unknown IDs: ${unknown.join(', ')}.`);
+        }
+        trace.push(`load_ha_tool_categories: added=[${added.join(',')}] loaded=[${[...loadedHaCategories].join(',')}]`);
+        return { ok: true, output: parts.join(' ') };
+      };
+
+      const loadHaRegisteredTool: RegisteredTool = {
+        definition: LOAD_HA_TOOL_CATEGORIES_DEFINITION,
+        execute: executeLoadHaTool,
+      };
+
       await report('Loading tools…');
-      const allowedToolNames = new Set(getAlwaysLoadedToolNames());
-      for (const name of getToolsForCategories(selectedCategories)) {
-        allowedToolNames.add(name);
-      }
-      const { definitions, dispatch } = await toolRegistry.loadTools(allowedToolNames, {
-        sessionId,
-      });
-      trace.push(`tools_loaded: ${definitions.length} (base + [${selectedCategories.join(', ')}])`);
+      let allowedToolNames = buildAllowedToolNames();
+      let toolBundle = await toolRegistry.loadTools(
+        allowedToolNames,
+        { sessionId },
+        includeLoadHaTool ? [loadHaRegisteredTool] : []
+      );
+      trace.push(
+        `tools_loaded: ${toolBundle.definitions.length} (categories: ${selectedCategories.join(', ') || 'base'}; on_demand_ha: ${[...loadedHaCategories].join(', ') || 'none'})`
+      );
 
       const memoryContent = await readMemory();
       const execMessages: LlmMessage[] = [
@@ -493,12 +490,27 @@ export class Assistant {
       ];
 
       const newMessages: LlmMessage[] = [currentUserMessage];
+      const toolState = { bundle: toolBundle };
       const { reply, turnMessages } = await this.runToolLoop(
         execMessages,
-        definitions,
-        dispatch,
+        toolState,
         trace,
-        options?.onProgress
+        options?.onProgress,
+        includeLoadHaTool
+          ? {
+              reloadTools: async () => {
+                allowedToolNames = buildAllowedToolNames();
+                toolState.bundle = await toolRegistry.loadTools(
+                  allowedToolNames,
+                  { sessionId },
+                  [loadHaRegisteredTool]
+                );
+                trace.push(
+                  `tools_reloaded: ${toolState.bundle.definitions.length} (on_demand_ha: ${[...loadedHaCategories].join(', ')})`
+                );
+              },
+            }
+          : undefined
       );
 
       newMessages.push(...turnMessages);
@@ -537,17 +549,25 @@ export class Assistant {
       scan_cancel: 'Cancelling scan…',
     };
     if (phases[toolName]) return phases[toolName];
+    if (toolName === 'load_ha_tool_categories') return 'Loading Home Assistant tools…';
     if (toolName.startsWith('ha_')) return 'Calling Home Assistant…';
     return 'Working…';
   }
 
   private async runToolLoop(
     messages: LlmMessage[],
-    definitions: ToolDefinition[],
-    dispatch: Map<string, (args: Record<string, unknown>) => Promise<{ ok: boolean; output: string }>>,
+    toolState: {
+      bundle: {
+        definitions: ToolDefinition[];
+        dispatch: Map<string, (args: Record<string, unknown>) => Promise<{ ok: boolean; output: string }>>;
+      };
+    },
     trace: string[],
-    onProgress?: AssistantProgressCallback
+    onProgress?: AssistantProgressCallback,
+    dynamicTools?: { reloadTools: () => Promise<void> }
   ): Promise<{ reply: string; turnMessages: LlmMessage[] }> {
+    let definitions = toolState.bundle.definitions;
+    let dispatch = toolState.bundle.dispatch;
     const report = async (phase: string): Promise<void> => {
       try {
         await onProgress?.(phase);
@@ -625,6 +645,11 @@ export class Assistant {
             trace.push(
               `tool_result[${callCount}]: ${execResult.ok ? 'ok' : 'error'} ${output.slice(0, 180)}`
             );
+            if (toolName === 'load_ha_tool_categories' && dynamicTools) {
+              await dynamicTools.reloadTools();
+              definitions = toolState.bundle.definitions;
+              dispatch = toolState.bundle.dispatch;
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             output = `Tool execution error: ${message}`;
