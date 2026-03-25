@@ -132,6 +132,12 @@ if (!parsedEnv.success) {
 
 const env = parsedEnv.data;
 
+if (process.env.LLM_SKIP_TRIAGE !== undefined && String(process.env.LLM_SKIP_TRIAGE).trim() !== '') {
+  console.warn(
+    '[maikbot] LLM_SKIP_TRIAGE is deprecated and ignored; remove it from .env. Extra Home Assistant tools load via load_ha_tool_categories (see README Architecture).'
+  );
+}
+
 const allowedUserIds = env.ALLOWED_TELEGRAM_USER_IDS
   .split(',')
   .map((entry) => entry.trim())
