@@ -77,6 +77,63 @@ If an old `.env` still sets `LLM_SKIP_TRIAGE`, it is **ignored**; the backend lo
 
 ## Tools
 
+### Overview of Available Tools & Skills
+
+A summary of available capabilities:
+
+- **Home Assistant**
+  - Search entities / inspect states (`ha_search_entities`, `ha_get_state`, …)
+  - Execute services (e.g. toggle lights, adjust thermostat)
+  - Create, edit & debug automations, scripts & helper entities
+  - Manage areas, devices, labels, integrations, dashboards, logbook & history
+  - System maintenance (restarts, updates, backups, add-ons, HACS)
+- **Shell / Filesystem**
+  - Execute Bash commands (including asynchronous background jobs)
+  - Read, write, and modify files
+- **Browser Automation**
+  - Open web pages, extract content, capture and analyze screenshots
+- **Vision**
+  - Analyze images (OCR / text recognition, error diagnosis, visual inspections)
+- **Document Scanner**
+  - Scan single or multi-page documents, monitor scan status, cancel
+- **Scheduling & Reminders**
+  - One-time reminders
+  - Daily & weekly recurring tasks / schedules
+- **Code Assistance & Self-Improvement**
+  - Gemini CLI for larger code refactors, feature development, PR creation
+  - Self-update of the bot (`git pull` + rebuild + restart)
+- **Agent Configuration**
+  - View and switch runtime configuration (LLM providers, active models)
+
+<details>
+<summary>🇩🇪 Deutsche Übersicht der verfügbaren Werkzeuge</summary>
+
+- **Home Assistant**
+  - Entitäten suchen / Zustände lesen
+  - Dienste ausführen (z. B. Licht ein/aus, Thermostat einstellen)
+  - Automatisierungen, Skripte & Hilfs‑Entitäten anlegen, bearbeiten & debuggen
+  - Bereiche, Geräte, Labels, Integrationen, Dashboards, Log‑Buch & Historie
+  - System‑Wartung (Neustart, Updates, Backups, Add‑Ons, HACS)
+- **Shell / Dateisystem**
+  - Bash‑Befehle ausführen (inkl. asynchroner Jobs)
+  - Dateien lesen, schreiben, ändern
+- **Browser**
+  - Webseiten öffnen, Inhalt erfassen, Screenshots machen und analysieren
+- **Vision**
+  - Bilder analysieren (Texterkennung, Fehlerbeschreibung usw.)
+- **Scanner**
+  - Einzelseiten scannen, Status prüfen, abbrechen
+- **Zeitplanung**
+  - Erinnerungen (einmalig)
+  - Tägliche & wöchentliche wiederkehrende Aufgaben
+- **Code‑Assistenz**
+  - Gemini CLI für größere Coderefacts, Feature‑Entwicklung, PR‑Erstellung
+  - Selbst‑Update des Bots (git pull + Neustart)
+- **Sonstiges**
+  - Agent‑Konfiguration anzeigen/ändern (LLM‑Provider, Modelle)
+
+</details>
+
 Every message goes through a **two-layer tool scheme**: a fixed set of tools is always available, and additional Home Assistant capability can be loaded on demand mid-turn.
 
 ### Always-loaded tools
